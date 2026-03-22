@@ -168,3 +168,97 @@ cases:
     ), case_result.result_payload
     assert summary["evidence_contract_score"] == 1.0
     assert summary["overall_score"] == 1.0
+
+
+def test_eval_runner_scores_source_rank_order_constraints(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_rank_order"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "docs").mkdir()
+
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_root / "docs" / "auth.md").write_text(
+        "\n".join(
+            [
+                "# Auth Overview",
+                "",
+                "The require_admin helper enforces admin access checks.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Eval Rank", slug="tenant-eval-rank")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-rank-order",
+        provider="local",
+        external_id="sample-repo-rank-order",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    dataset_path = tmp_path / "eval_rank_order.yaml"
+    dataset_path.write_text(
+        f"""
+name: rank-order-eval
+description: eval source-rank order contract
+cases:
+  - id: locate_auth_rank_order_ok
+    query: where is require_admin defined
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+    must_rank_before:
+      - higher: repo_code:src/auth.py
+        lower: repo_doc:docs/auth.md
+  - id: locate_auth_rank_order_bad
+    query: where is require_admin defined
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+    must_rank_before:
+      - higher: repo_doc:docs/auth.md
+        lower: repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+
+    summary = EvalRunnerService(db_session).run_from_yaml(dataset_path)
+    case_results = list(db_session.scalars(select(EvalCaseResult).order_by(EvalCaseResult.id)))
+
+    assert len(case_results) == 2
+    assert case_results[0].result_payload["scores"]["rank_order_ok"] == 1.0
+    assert case_results[1].result_payload["scores"]["rank_order_ok"] == 0.0
+    assert case_results[0].result_payload["scores"]["evidence_contract_score"] == 1.0
+    assert case_results[1].result_payload["scores"]["evidence_contract_score"] < 1.0
+    assert summary["evidence_contract_score"] == 0.9
