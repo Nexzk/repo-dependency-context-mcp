@@ -83,7 +83,7 @@ jobs:
       - name: Seed demo data for smoke
         run: |
           python scripts/seed_demo.py > smoke-seed.json
-          python -c "import json, os, pathlib; data = json.loads(pathlib.Path('smoke-seed.json').read_text()); pathlib.Path(os.environ['GITHUB_ENV']).write_text(f'RDCMCP_SMOKE_TENANT_ID={data[\"tenant_id\"]}\nRDCMCP_SMOKE_REPO_ID={data[\"repo_id\"]}\n', encoding='utf-8', newline='\n')"
+          python -c "import json, os, pathlib; data = json.loads(pathlib.Path('smoke-seed.json').read_text()); pathlib.Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8', newline='\n').write(f'RDCMCP_SMOKE_TENANT_ID={data[\"tenant_id\"]}\nRDCMCP_SMOKE_REPO_ID={data[\"repo_id\"]}\n')"
 
       - name: Start API and run smoke
         shell: bash

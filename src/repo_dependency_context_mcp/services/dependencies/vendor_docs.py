@@ -88,7 +88,7 @@ class VendorDocIngestService:
         requests: list[VendorDocDiscoveryRequest],
     ) -> int:
         candidates: list[VendorDocCandidate] = []
-        seen_urls: set[str] = set()
+        page_cache: dict[str, tuple[str, str | None, str] | None] = {}
         with httpx.Client(follow_redirects=True, timeout=10.0) as client:
             for request in requests:
                 allowed_domains = self.official_domains.get(package_name, [])
@@ -108,19 +108,27 @@ class VendorDocIngestService:
                     max_pages=request.max_pages,
                 )
                 for page_url in page_urls:
-                    if page_url in seen_urls:
+                    if page_url not in page_cache:
+                        try:
+                            page_response = client.get(page_url)
+                            page_response.raise_for_status()
+                        except Exception:
+                            page_cache[page_url] = None
+                            continue
+                        page_parser = _SimpleHtmlDocParser()
+                        page_parser.feed(page_response.text)
+                        page_cache[page_url] = (
+                            page_parser.title or page_url,
+                            page_parser.first_heading,
+                            page_parser.text_content(),
+                        )
+                    page_data = page_cache[page_url]
+                    if page_data is None:
                         continue
-                    try:
-                        page_response = client.get(page_url)
-                        page_response.raise_for_status()
-                    except Exception:
-                        continue
-                    seen_urls.add(page_url)
-                    page_parser = _SimpleHtmlDocParser()
-                    page_parser.feed(page_response.text)
+                    page_title, section_title, raw_text = page_data
                     resolved_doc_type = _infer_doc_type(
                         url=page_url,
-                        title=page_parser.title or "",
+                        title=page_title,
                         default_doc_type=request.doc_type,
                         include_doc_types=request.include_doc_types or [],
                     )
@@ -133,9 +141,9 @@ class VendorDocIngestService:
                             doc_type=resolved_doc_type,
                             authority="official",
                             url=page_url,
-                            title=page_parser.title or page_url,
-                            section_title=page_parser.first_heading,
-                            raw_text=page_parser.text_content(),
+                            title=page_title,
+                            section_title=section_title,
+                            raw_text=raw_text,
                             version_range=request.version_range,
                         )
                     )

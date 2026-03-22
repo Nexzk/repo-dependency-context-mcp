@@ -335,6 +335,62 @@ def test_ingest_candidates_deduplicates_same_batch_urls(
     assert docs[0].url == "https://docs.example.com/docs/changelog/v1"
 
 
+def test_discover_and_ingest_allows_same_page_across_request_filters(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = {
+        "https://docs.example.com/docs/index": """
+        <html><body>
+            <a href="/docs/migration/v2">Migration Guide</a>
+        </body></html>
+        """,
+        "https://docs.example.com/docs/migration/v2": """
+        <html><head><title>Migration Guide</title></head><body>
+            <h1>v2 Migration Guide</h1>
+            <p>Upgrade steps</p>
+        </body></html>
+        """,
+    }
+    service = VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["docs.example.com"]},
+    )
+    monkeypatch.setattr(
+        "repo_dependency_context_mcp.services.dependencies.vendor_docs.httpx.Client",
+        lambda *args, **kwargs: FakeHttpClient(responses),
+    )
+
+    result = service.discover_and_ingest(
+        "fastapi",
+        "python",
+        [
+            _make_discovery_request(
+                version_range=">=0.110,<1.0",
+                index_url="https://docs.example.com/docs/index",
+                doc_type="release_notes",
+                include_url_prefixes=("https://docs.example.com/docs/",),
+                include_doc_types=("release_notes",),
+                max_pages=10,
+            ),
+            _make_discovery_request(
+                version_range=">=0.110,<1.0",
+                index_url="https://docs.example.com/docs/index",
+                doc_type="release_notes",
+                include_url_prefixes=("https://docs.example.com/docs/",),
+                include_doc_types=("migration_guide",),
+                max_pages=10,
+            ),
+        ],
+    )
+
+    assert result == 1
+    docs = db_session.scalars(select(DependencyDoc)).all()
+    assert len(docs) == 1
+    assert docs[0].doc_type == "migration_guide"
+    assert docs[0].url == "https://docs.example.com/docs/migration/v2"
+
+
 class FakeHttpResponse:
     def __init__(
         self,
