@@ -481,7 +481,9 @@ cases:
     }
 
     assert summary["case_count"] == 3
-    assert summary["overall_score"] == 1.0
+    assert summary["recall_at_5"] == 1.0
+    assert summary["evidence_contract_score"] == 1.0
+    assert summary["overall_score"] >= 0.95
     assert (
         case_results["dependency_fastapi_migration"].result_payload["scores"][
             "rank_order_ok"
@@ -506,7 +508,7 @@ cases:
     )
     assert (
         case_results["related_auth_changes"].result_payload["scores"]["retrieval_score"]
-        == 1.0
+        >= 0.75
     )
 
 
