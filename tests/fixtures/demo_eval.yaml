@@ -8,6 +8,7 @@ cases:
     repo_id: __REPO_ID__
     must_hit_sources:
       - repo_code:src/auth.py
+    expected_top_source: repo_code:src/auth.py
     expected_authorities:
       - repo
     expected_freshness_contains:
@@ -25,6 +26,7 @@ cases:
     must_hit_sources:
       - vendor_doc:https://fastapi.tiangolo.com/release-notes/
       - dependency_manifest:requirements.txt
+    expected_top_source: vendor_doc:https://fastapi.tiangolo.com/release-notes/
     expected_authorities:
       - official
     expected_freshness_contains:

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 
 from repo_dependency_context_mcp.db.models import EvalCase, EvalCaseResult, EvalRun, Repo, Tenant
@@ -299,7 +300,7 @@ cases:
         case_results["locate_auth_rank_order_bad"].result_payload["scores"]["evidence_contract_score"]
         < 1.0
     )
-    assert summary["evidence_contract_score"] == 0.9
+    assert summary["evidence_contract_score"] == pytest.approx(11 / 12)
 
 
 def test_eval_runner_covers_repo_dependency_and_related_change_cases(
@@ -428,6 +429,7 @@ cases:
     repo_id: "{repo.id}"
     must_hit_sources:
       - repo_code:src/auth.py
+    expected_top_source: repo_code:src/auth.py
     expected_authorities:
       - repo
     expected_freshness_contains:
@@ -444,6 +446,7 @@ cases:
     must_hit_sources:
       - vendor_doc:https://fastapi.tiangolo.com/release-notes/
       - dependency_manifest:requirements.txt
+    expected_top_source: vendor_doc:https://fastapi.tiangolo.com/release-notes/
     expected_authorities:
       - official
     expected_freshness_contains:
@@ -487,11 +490,136 @@ cases:
     )
     assert (
         case_results["dependency_fastapi_migration"].result_payload["scores"][
+            "top_source_ok"
+        ]
+        == 1.0
+    )
+    assert (
+        case_results["dependency_fastapi_migration"].result_payload["scores"][
             "authority_match"
         ]
+        == 1.0
+    )
+    assert (
+        case_results["locate_auth"].result_payload["scores"]["top_source_ok"]
         == 1.0
     )
     assert (
         case_results["related_auth_changes"].result_payload["scores"]["retrieval_score"]
         == 1.0
     )
+
+
+def test_eval_runner_scores_expected_top_source_constraint(
+    db_session,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    tenant = Tenant(name="Tenant Eval Top Source", slug="tenant-eval-top-source")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-top-source",
+        provider="local",
+        external_id="sample-repo-top-source",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    freshness_reason = (
+        "Freshness: repository content from latest local ingest snapshot"
+    )
+    evidence_by_query = {
+        "top source ok query": [
+            {
+                "source_type": "repo_code",
+                "path_or_url": "src/auth.py",
+                "authority": "repo",
+                "freshness_reason": freshness_reason,
+                "why_selected": "Signal: lexical match",
+            },
+            {
+                "source_type": "repo_doc",
+                "path_or_url": "docs/auth.md",
+                "authority": "repo",
+                "freshness_reason": freshness_reason,
+                "why_selected": "Signal: lexical match",
+            },
+        ],
+        "top source bad query": [
+            {
+                "source_type": "repo_doc",
+                "path_or_url": "docs/auth.md",
+                "authority": "repo",
+                "freshness_reason": freshness_reason,
+                "why_selected": "Signal: lexical match",
+            },
+            {
+                "source_type": "repo_code",
+                "path_or_url": "src/auth.py",
+                "authority": "repo",
+                "freshness_reason": freshness_reason,
+                "why_selected": "Signal: lexical match",
+            },
+        ],
+    }
+
+    runner = EvalRunnerService(db_session)
+    monkeypatch.setattr(
+        runner.tool_service,
+        "search_context",
+        lambda tenant_id, repo_id, query, task_type, top_k: {
+            "evidence": evidence_by_query[query],
+        },
+    )
+
+    dataset_path = tmp_path / "eval_top_source.yaml"
+    dataset_path.write_text(
+        f"""
+name: top-source-eval
+description: eval strict top-source contract
+cases:
+  - id: top_source_ok
+    query: top source ok query
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+    expected_top_source: repo_code:src/auth.py
+  - id: top_source_bad
+    query: top source bad query
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+    expected_top_source: repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+
+    summary = runner.run_from_yaml(dataset_path)
+    eval_cases = {
+        case.id: case.name for case in db_session.scalars(select(EvalCase)).all()
+    }
+    case_results = {
+        eval_cases[result.eval_case_id]: result
+        for result in db_session.scalars(select(EvalCaseResult)).all()
+    }
+
+    assert case_results["top_source_ok"].result_payload["scores"]["top_source_ok"] == 1.0
+    assert case_results["top_source_bad"].result_payload["scores"]["top_source_ok"] == 0.0
+    assert (
+        case_results["top_source_ok"].result_payload["scores"]["evidence_contract_score"]
+        == 1.0
+    )
+    assert (
+        case_results["top_source_bad"].result_payload["scores"]["evidence_contract_score"]
+        < 1.0
+    )
+    assert summary["evidence_contract_score"] < 1.0

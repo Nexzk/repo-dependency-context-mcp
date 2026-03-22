@@ -19,6 +19,7 @@ class EvalMetrics:
     why_selected_match: float
     evidence_count_ok: float
     rank_order_ok: float
+    top_source_ok: float
 
     @property
     def retrieval_score(self) -> float:
@@ -32,7 +33,8 @@ class EvalMetrics:
             + self.why_selected_match
             + self.evidence_count_ok
             + self.rank_order_ok
-        ) / 5
+            + self.top_source_ok
+        ) / 6
 
     @property
     def overall_score(self) -> float:
@@ -77,6 +79,7 @@ class EvalRunnerService:
                     "acceptable_sources": case_payload.get("acceptable_sources", []),
                     "must_not_hit_sources": case_payload.get("must_not_hit_sources", []),
                     "must_rank_before": case_payload.get("must_rank_before", []),
+                    "expected_top_source": case_payload.get("expected_top_source"),
                 },
                 metadata_json={
                     "tool": case_payload.get("tool", "search_context"),
@@ -110,6 +113,7 @@ class EvalRunnerService:
                 min_evidence_count=case_payload.get("min_evidence_count"),
                 max_evidence_count=case_payload.get("max_evidence_count"),
                 must_rank_before=case_payload.get("must_rank_before", []),
+                expected_top_source=case_payload.get("expected_top_source"),
             )
             recalls.append(metrics.recall_at_5)
             reciprocal_ranks.append(metrics.mrr)
@@ -134,6 +138,7 @@ class EvalRunnerService:
                             "why_selected_match": metrics.why_selected_match,
                             "evidence_count_ok": metrics.evidence_count_ok,
                             "rank_order_ok": metrics.rank_order_ok,
+                            "top_source_ok": metrics.top_source_ok,
                             "retrieval_score": metrics.retrieval_score,
                             "evidence_contract_score": metrics.evidence_contract_score,
                             "overall_score": metrics.overall_score,
@@ -195,6 +200,7 @@ class EvalRunnerService:
         min_evidence_count: int | None,
         max_evidence_count: int | None,
         must_rank_before: list[dict[str, str]],
+        expected_top_source: str | None,
     ) -> EvalMetrics:
         source_keys = [f"{item['source_type']}:{item['path_or_url']}" for item in evidence]
         recall = 1.0 if any(source in source_keys for source in must_hit_sources) else 0.0
@@ -231,6 +237,10 @@ class EvalRunnerService:
             source_keys=source_keys,
             must_rank_before=must_rank_before,
         )
+        top_source_ok = _top_source_ok(
+            source_keys=source_keys,
+            expected_top_source=expected_top_source,
+        )
 
         return EvalMetrics(
             recall_at_5=recall,
@@ -240,6 +250,7 @@ class EvalRunnerService:
             why_selected_match=why_selected_match,
             evidence_count_ok=evidence_count_ok,
             rank_order_ok=rank_order_ok,
+            top_source_ok=top_source_ok,
         )
 
 
@@ -287,3 +298,14 @@ def _rank_order_ok(
         if positions[higher] >= positions[lower]:
             return 0.0
     return 1.0
+
+
+def _top_source_ok(
+    source_keys: list[str],
+    expected_top_source: str | None,
+) -> float:
+    if not expected_top_source:
+        return 1.0
+    if not source_keys:
+        return 0.0
+    return 1.0 if source_keys[0] == expected_top_source else 0.0
