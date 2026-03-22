@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from fastapi import APIRouter
 from sqlalchemy import desc, func, select
 
@@ -24,6 +26,11 @@ def metrics() -> dict:
         sync_state = SyncStateService(session)
         latest_eval_runs = list_latest_eval_runs(session, limit=5)
         latest_eval_failures = list_latest_eval_failures(session)
+        recent_eval_check_failures = aggregate_recent_eval_check_failures(latest_eval_runs)
+        recent_eval_failed_cases = sum(
+            int(run.summary_json.get("failed_case_count", 0))
+            for run in latest_eval_runs
+        )
         return {
             "ingest_jobs": session.scalar(select(func.count()).select_from(IngestJob)) or 0,
             "query_logs": session.scalar(select(func.count()).select_from(QueryLog)) or 0,
@@ -35,6 +42,9 @@ def metrics() -> dict:
                 for run in latest_eval_runs
             ],
             "latest_eval_failures": latest_eval_failures,
+            "recent_eval_check_failures": recent_eval_check_failures,
+            "recent_eval_failed_cases": recent_eval_failed_cases,
+            "recent_eval_window": len(latest_eval_runs),
             "latest_sync_runs": [
                 {
                     "source_kind": run.source_kind,
@@ -99,3 +109,15 @@ def list_latest_eval_failures(session) -> list[dict]:
             }
         )
     return failures
+
+
+def aggregate_recent_eval_check_failures(runs: list[EvalRun]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for run in runs:
+        counter.update(
+            {
+                str(check): int(count)
+                for check, count in run.summary_json.get("failing_checks", {}).items()
+            }
+        )
+    return dict(counter)
