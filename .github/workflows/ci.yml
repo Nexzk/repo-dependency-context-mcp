@@ -55,17 +55,51 @@ jobs:
       - name: Ruff
         run: ruff check src tests scripts --select F,I
 
+      - name: Ruff Focused Phase 2 Sources
+        run: >-
+          ruff check
+          src/repo_dependency_context_mcp/services/ingest/change_metadata.py
+          src/repo_dependency_context_mcp/services/ingest/github_metadata.py
+          src/repo_dependency_context_mcp/services/dependencies/vendor_docs.py
+          src/repo_dependency_context_mcp/services/mcp/tools.py
+          --select E,F,I,B
+
       - name: MyPy
         run: >-
           python -m mypy
           --ignore-missing-imports
           --follow-imports=silent
           src/repo_dependency_context_mcp/config.py
+          src/repo_dependency_context_mcp/services/ingest/change_metadata.py
+          src/repo_dependency_context_mcp/services/ingest/github_metadata.py
+          src/repo_dependency_context_mcp/services/dependencies/vendor_docs.py
+          src/repo_dependency_context_mcp/services/mcp/tools.py
           src/repo_dependency_context_mcp/services/retrieval/embedding_provider.py
           src/repo_dependency_context_mcp/services/retrieval/rerank_provider.py
 
       - name: Apply migrations
         run: python -m alembic upgrade head
+
+      - name: Seed demo data for smoke
+        run: |
+          python scripts/seed_demo.py > smoke-seed.json
+          python -c "import json, os, pathlib; data = json.loads(pathlib.Path('smoke-seed.json').read_text()); pathlib.Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8', newline='\n').write(f'RDCMCP_SMOKE_TENANT_ID={data[\"tenant_id\"]}\nRDCMCP_SMOKE_REPO_ID={data[\"repo_id\"]}\n')"
+
+      - name: Start API and run smoke
+        shell: bash
+        run: |
+          python -m uvicorn repo_dependency_context_mcp.main:app --host 127.0.0.1 --port 8000 --app-dir src &
+          UVICORN_PID=$!
+          cleanup() {
+            kill $UVICORN_PID || true
+          }
+          trap cleanup EXIT
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8000/healthz && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/healthz > /dev/null
+          pwsh ./scripts/smoke.ps1
 
       - name: Run tests
         run: pytest

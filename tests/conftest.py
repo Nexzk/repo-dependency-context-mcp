@@ -21,6 +21,8 @@ os.environ.setdefault("RDCMCP_ENV", "test")
 os.environ.setdefault("RDCMCP_DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/rdcmcp")
 os.environ.setdefault("RDCMCP_REDIS_URL", "redis://localhost:6379/0")
 
+TEST_DB_LOCK_ID = 842021
+
 
 @pytest.fixture(scope="session")
 def settings() -> Settings:
@@ -54,12 +56,20 @@ def db_session(db_engine) -> Session:
         "tenants",
     ]
 
-    with db_engine.begin() as connection:
-        connection.execute(text(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE"))
-
-    session_factory = create_session_factory(Settings())
-    session = session_factory()
+    lock_connection = db_engine.connect()
+    session: Session | None = None
     try:
+        lock_connection.execute(text(f"SELECT pg_advisory_lock({TEST_DB_LOCK_ID})"))
+        lock_connection.execute(text(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE"))
+        lock_connection.commit()
+
+        session_factory = create_session_factory(Settings())
+        session = session_factory()
         yield session
     finally:
-        session.close()
+        if session is not None:
+            session.close()
+        try:
+            lock_connection.execute(text(f"SELECT pg_advisory_unlock({TEST_DB_LOCK_ID})"))
+        finally:
+            lock_connection.close()

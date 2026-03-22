@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from repo_dependency_context_mcp.db.models import DependencyDoc
@@ -28,12 +29,27 @@ class VendorDocFetchRequest:
     version_range: str | None = None
 
 
+@dataclass(slots=True)
+class VendorDocDiscoveryRequest:
+    index_url: str
+    doc_type: str
+    version_range: str | None = None
+    include_url_prefixes: list[str] | None = None
+    include_doc_types: list[str] | None = None
+    max_pages: int = 10
+
+
 class VendorDocIngestService:
     def __init__(self, session: Session, official_domains: dict[str, list[str]]) -> None:
         self.session = session
         self.official_domains = official_domains
 
-    def fetch_and_ingest(self, package_name: str, ecosystem: str, requests: list[VendorDocFetchRequest]) -> int:
+    def fetch_and_ingest(
+        self,
+        package_name: str,
+        ecosystem: str,
+        requests: list[VendorDocFetchRequest],
+    ) -> int:
         candidates: list[VendorDocCandidate] = []
         with httpx.Client(follow_redirects=True, timeout=10.0) as client:
             for request in requests:
@@ -65,6 +81,83 @@ class VendorDocIngestService:
             ingest_source="vendor_docs_fetcher",
         )
 
+    def discover_and_ingest(
+        self,
+        package_name: str,
+        ecosystem: str,
+        requests: list[VendorDocDiscoveryRequest],
+    ) -> int:
+        candidates: list[VendorDocCandidate] = []
+        page_cache: dict[str, tuple[str, str | None, str] | None] = {}
+        with httpx.Client(follow_redirects=True, timeout=10.0) as client:
+            for request in requests:
+                allowed_domains = self.official_domains.get(package_name, [])
+                if not self._is_allowed_domain(request.index_url, allowed_domains):
+                    continue
+
+                response = client.get(request.index_url)
+                response.raise_for_status()
+                parser = _SimpleHtmlDocParser()
+                parser.feed(response.text)
+
+                page_urls = self._discover_page_urls(
+                    index_url=request.index_url,
+                    links=parser.links,
+                    allowed_domains=allowed_domains,
+                    include_url_prefixes=request.include_url_prefixes or [],
+                    max_pages=request.max_pages,
+                )
+                for page_url in page_urls:
+                    if page_url not in page_cache:
+                        try:
+                            page_response = client.get(page_url)
+                            page_response.raise_for_status()
+                        except Exception:
+                            page_cache[page_url] = None
+                            continue
+                        page_parser = _SimpleHtmlDocParser()
+                        page_parser.feed(page_response.text)
+                        page_cache[page_url] = (
+                            page_parser.title or page_url,
+                            page_parser.first_heading,
+                            page_parser.text_content(),
+                        )
+                    page_data = page_cache[page_url]
+                    if page_data is None:
+                        continue
+                    page_title, section_title, raw_text = page_data
+                    resolved_doc_type = _infer_doc_type(
+                        url=page_url,
+                        title=page_title,
+                        default_doc_type=request.doc_type,
+                        include_doc_types=request.include_doc_types or [],
+                    )
+                    if resolved_doc_type is None:
+                        continue
+                    if (
+                        request.include_doc_types
+                        and resolved_doc_type not in request.include_doc_types
+                    ):
+                        continue
+                    candidates.append(
+                        VendorDocCandidate(
+                            doc_type=resolved_doc_type,
+                            authority="official",
+                            url=page_url,
+                            title=page_title,
+                            section_title=section_title,
+                            raw_text=raw_text,
+                            version_range=request.version_range,
+                        )
+                    )
+
+        return self.ingest_candidates(
+            package_name=package_name,
+            ecosystem=ecosystem,
+            candidates=candidates,
+            ingest_source="vendor_docs_discovery",
+        )
+
     def ingest_candidates(
         self,
         package_name: str,
@@ -74,25 +167,57 @@ class VendorDocIngestService:
     ) -> int:
         allowed_domains = self.official_domains.get(package_name, [])
         accepted = 0
+        seen_urls: set[str] = set()
 
         for candidate in candidates:
+            if candidate.url in seen_urls:
+                continue
+            seen_urls.add(candidate.url)
             if not self._is_allowed_domain(candidate.url, allowed_domains):
                 continue
 
-            self.session.add(
-                DependencyDoc(
-                    package_name=package_name,
-                    ecosystem=ecosystem,
-                    doc_type=candidate.doc_type,
-                    authority="official",
-                    url=candidate.url,
-                    version_range=candidate.version_range,
-                    title=candidate.title,
-                    section_title=candidate.section_title,
-                    raw_text=candidate.raw_text,
-                    metadata_json={"ingest_source": ingest_source},
+            existing = self.session.execute(
+                select(DependencyDoc).where(DependencyDoc.url == candidate.url)
+            ).scalar_one_or_none()
+            metadata = {"ingest_source": ingest_source}
+            if existing is not None:
+                unchanged = (
+                    existing.package_name == package_name
+                    and existing.ecosystem == ecosystem
+                    and existing.doc_type == candidate.doc_type
+                    and existing.authority == "official"
+                    and existing.version_range == candidate.version_range
+                    and existing.title == candidate.title
+                    and existing.section_title == candidate.section_title
+                    and existing.raw_text == candidate.raw_text
+                    and existing.metadata_json == metadata
                 )
-            )
+                if unchanged:
+                    continue
+                existing.package_name = package_name
+                existing.ecosystem = ecosystem
+                existing.doc_type = candidate.doc_type
+                existing.authority = "official"
+                existing.version_range = candidate.version_range
+                existing.title = candidate.title
+                existing.section_title = candidate.section_title
+                existing.raw_text = candidate.raw_text
+                existing.metadata_json = metadata
+            else:
+                self.session.add(
+                    DependencyDoc(
+                        package_name=package_name,
+                        ecosystem=ecosystem,
+                        doc_type=candidate.doc_type,
+                        authority="official",
+                        url=candidate.url,
+                        version_range=candidate.version_range,
+                        title=candidate.title,
+                        section_title=candidate.section_title,
+                        raw_text=candidate.raw_text,
+                        metadata_json=metadata,
+                    )
+                )
             accepted += 1
 
         self.session.commit()
@@ -102,7 +227,33 @@ class VendorDocIngestService:
         if not allowed_domains:
             return False
         hostname = (urlparse(url).hostname or "").lower()
-        return any(hostname == domain or hostname.endswith(f".{domain}") for domain in allowed_domains)
+        return any(
+            hostname == domain or hostname.endswith(f".{domain}")
+            for domain in allowed_domains
+        )
+
+    def _discover_page_urls(
+        self,
+        index_url: str,
+        links: list[str],
+        allowed_domains: list[str],
+        include_url_prefixes: list[str],
+        max_pages: int,
+    ) -> list[str]:
+        discovered: list[str] = []
+        for link in links:
+            resolved = urljoin(index_url, link)
+            if not self._is_allowed_domain(resolved, allowed_domains):
+                continue
+            if include_url_prefixes and not any(
+                resolved.startswith(prefix) for prefix in include_url_prefixes
+            ):
+                continue
+            if resolved not in discovered:
+                discovered.append(resolved)
+            if len(discovered) >= max_pages:
+                break
+        return discovered
 
 
 class _SimpleHtmlDocParser(HTMLParser):
@@ -112,9 +263,14 @@ class _SimpleHtmlDocParser(HTMLParser):
         self.first_heading: str | None = None
         self._current_tag: str | None = None
         self._parts: list[str] = []
+        self.links: list[str] = []
 
-    def handle_starttag(self, tag: str, attrs) -> None:  # noqa: ANN001
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._current_tag = tag.lower()
+        if self._current_tag == "a":
+            for key, value in attrs:
+                if key.lower() == "href" and value:
+                    self.links.append(str(value))
 
     def handle_endtag(self, tag: str) -> None:
         self._current_tag = None
@@ -131,3 +287,20 @@ class _SimpleHtmlDocParser(HTMLParser):
 
     def text_content(self) -> str:
         return "\n".join(self._parts)
+
+
+def _infer_doc_type(
+    url: str,
+    title: str,
+    default_doc_type: str,
+    include_doc_types: list[str],
+) -> str | None:
+    haystack = f"{url} {title}".lower()
+    candidates = include_doc_types or [default_doc_type]
+    for candidate in candidates:
+        normalized = candidate.replace("_", " ")
+        if normalized in haystack or candidate.replace("_", "-") in haystack:
+            return candidate
+    if not include_doc_types:
+        return default_doc_type
+    return None

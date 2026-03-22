@@ -80,6 +80,31 @@ $env:RDCMCP_SMOKE_TENANT_ID="<printed-tenant-id>"
 $env:RDCMCP_SMOKE_REPO_ID="<printed-repo-id>"
 ```
 
+## CLI Workflows
+
+GitHub metadata ingest:
+
+```powershell
+rdcmcp github ingest <tenant_id> <repo_id> <owner> <repo_name> [base_url]
+```
+
+Single vendor doc fetch:
+
+```powershell
+rdcmcp vendor fetch <package_name> <ecosystem> <url> <version_range>
+```
+
+Controlled vendor doc discovery and batch sync:
+
+```powershell
+rdcmcp vendor discover <package_name> <ecosystem> <index_url> <version_range>
+```
+
+Notes:
+- `vendor discover` only follows links that remain inside the package's official domain whitelist.
+- The current CLI command uses the index URL as the discovery root and limits discovery to release-note and migration-guide pages below that root.
+- Re-running the same discovery command is idempotent and will not duplicate existing `dependency_docs` rows.
+
 ## Important Endpoints
 
 - `GET /healthz`
