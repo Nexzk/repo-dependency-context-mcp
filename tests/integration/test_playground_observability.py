@@ -78,3 +78,5 @@ cases:
     assert metrics.json()["ingest_jobs"] >= 1
     assert metrics.json()["query_logs"] >= 1
     assert metrics.json()["eval_runs"] >= 1
+    assert "latest_sync_runs" in metrics.json()
+    assert "latest_sync_cursors" in metrics.json()

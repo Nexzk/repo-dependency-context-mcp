@@ -15,6 +15,7 @@ from repo_dependency_context_mcp.db.models.eval import (
 )
 from repo_dependency_context_mcp.db.models.identity import Repo, RepoMembership, Tenant, User
 from repo_dependency_context_mcp.db.models.query import QueryLog, QueryResult
+from repo_dependency_context_mcp.db.models.sync_state import SyncCursor, SyncRun
 
 __all__ = [
     "Chunk",
@@ -32,6 +33,8 @@ __all__ = [
     "RepoMembership",
     "Source",
     "Symbol",
+    "SyncCursor",
+    "SyncRun",
     "Tenant",
     "User",
 ]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import uuid
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
@@ -9,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from repo_dependency_context_mcp.db.models import DependencyDoc
+from repo_dependency_context_mcp.services.ingest.sync_state import SyncStateService
 
 
 @dataclass(slots=True)
@@ -50,36 +53,55 @@ class VendorDocIngestService:
         ecosystem: str,
         requests: list[VendorDocFetchRequest],
     ) -> int:
-        candidates: list[VendorDocCandidate] = []
-        with httpx.Client(follow_redirects=True, timeout=10.0) as client:
-            for request in requests:
-                allowed_domains = self.official_domains.get(package_name, [])
-                if not self._is_allowed_domain(request.url, allowed_domains):
-                    continue
-
-                response = client.get(request.url)
-                response.raise_for_status()
-                parser = _SimpleHtmlDocParser()
-                parser.feed(response.text)
-
-                candidates.append(
-                    VendorDocCandidate(
-                        doc_type=request.doc_type,
-                        authority="official",
-                        url=request.url,
-                        title=parser.title or request.url,
-                        section_title=parser.first_heading,
-                        raw_text=parser.text_content(),
-                        version_range=request.version_range,
-                    )
-                )
-
-        return self.ingest_candidates(
-            package_name=package_name,
-            ecosystem=ecosystem,
-            candidates=candidates,
-            ingest_source="vendor_docs_fetcher",
+        sync_state = SyncStateService(self.session)
+        run = sync_state.start_run(
+            tenant_id=_global_tenant_id(),
+            repo_id=None,
+            source_kind="vendor_docs",
+            scope_key=_scope_key(package_name, ecosystem),
+            cursor_kind="request_targets",
         )
+        candidates: list[VendorDocCandidate] = []
+        try:
+            with httpx.Client(follow_redirects=True, timeout=10.0) as client:
+                for request in requests:
+                    allowed_domains = self.official_domains.get(package_name, [])
+                    if not self._is_allowed_domain(request.url, allowed_domains):
+                        continue
+
+                    response = client.get(request.url)
+                    response.raise_for_status()
+                    parser = _SimpleHtmlDocParser()
+                    parser.feed(response.text)
+
+                    candidates.append(
+                        VendorDocCandidate(
+                            doc_type=request.doc_type,
+                            authority="official",
+                            url=request.url,
+                            title=parser.title or request.url,
+                            section_title=parser.first_heading,
+                            raw_text=parser.text_content(),
+                            version_range=request.version_range,
+                        )
+                    )
+
+            written = self.ingest_candidates(
+                package_name=package_name,
+                ecosystem=ecosystem,
+                candidates=candidates,
+                ingest_source="vendor_docs_fetcher",
+            )
+            sync_state.mark_success(
+                run=run,
+                cursor_after=_serialize_fetch_targets(requests),
+                items_seen=len(candidates),
+                items_written=written,
+            )
+            return written
+        except Exception as exc:
+            sync_state.mark_failure(run=run, error=str(exc))
+            raise
 
     def discover_and_ingest(
         self,
@@ -87,76 +109,95 @@ class VendorDocIngestService:
         ecosystem: str,
         requests: list[VendorDocDiscoveryRequest],
     ) -> int:
+        sync_state = SyncStateService(self.session)
+        run = sync_state.start_run(
+            tenant_id=_global_tenant_id(),
+            repo_id=None,
+            source_kind="vendor_docs",
+            scope_key=_scope_key(package_name, ecosystem),
+            cursor_kind="request_targets",
+        )
         candidates: list[VendorDocCandidate] = []
         page_cache: dict[str, tuple[str, str | None, str] | None] = {}
-        with httpx.Client(follow_redirects=True, timeout=10.0) as client:
-            for request in requests:
-                allowed_domains = self.official_domains.get(package_name, [])
-                if not self._is_allowed_domain(request.index_url, allowed_domains):
-                    continue
-
-                response = client.get(request.index_url)
-                response.raise_for_status()
-                parser = _SimpleHtmlDocParser()
-                parser.feed(response.text)
-
-                page_urls = self._discover_page_urls(
-                    index_url=request.index_url,
-                    links=parser.links,
-                    allowed_domains=allowed_domains,
-                    include_url_prefixes=request.include_url_prefixes or [],
-                    max_pages=request.max_pages,
-                )
-                for page_url in page_urls:
-                    if page_url not in page_cache:
-                        try:
-                            page_response = client.get(page_url)
-                            page_response.raise_for_status()
-                        except Exception:
-                            page_cache[page_url] = None
-                            continue
-                        page_parser = _SimpleHtmlDocParser()
-                        page_parser.feed(page_response.text)
-                        page_cache[page_url] = (
-                            page_parser.title or page_url,
-                            page_parser.first_heading,
-                            page_parser.text_content(),
-                        )
-                    page_data = page_cache[page_url]
-                    if page_data is None:
+        try:
+            with httpx.Client(follow_redirects=True, timeout=10.0) as client:
+                for request in requests:
+                    allowed_domains = self.official_domains.get(package_name, [])
+                    if not self._is_allowed_domain(request.index_url, allowed_domains):
                         continue
-                    page_title, section_title, raw_text = page_data
-                    resolved_doc_type = _infer_doc_type(
-                        url=page_url,
-                        title=page_title,
-                        default_doc_type=request.doc_type,
-                        include_doc_types=request.include_doc_types or [],
+
+                    response = client.get(request.index_url)
+                    response.raise_for_status()
+                    parser = _SimpleHtmlDocParser()
+                    parser.feed(response.text)
+
+                    page_urls = self._discover_page_urls(
+                        index_url=request.index_url,
+                        links=parser.links,
+                        allowed_domains=allowed_domains,
+                        include_url_prefixes=request.include_url_prefixes or [],
+                        max_pages=request.max_pages,
                     )
-                    if resolved_doc_type is None:
-                        continue
-                    if (
-                        request.include_doc_types
-                        and resolved_doc_type not in request.include_doc_types
-                    ):
-                        continue
-                    candidates.append(
-                        VendorDocCandidate(
-                            doc_type=resolved_doc_type,
-                            authority="official",
+                    for page_url in page_urls:
+                        if page_url not in page_cache:
+                            try:
+                                page_response = client.get(page_url)
+                                page_response.raise_for_status()
+                            except Exception:
+                                page_cache[page_url] = None
+                                continue
+                            page_parser = _SimpleHtmlDocParser()
+                            page_parser.feed(page_response.text)
+                            page_cache[page_url] = (
+                                page_parser.title or page_url,
+                                page_parser.first_heading,
+                                page_parser.text_content(),
+                            )
+                        page_data = page_cache[page_url]
+                        if page_data is None:
+                            continue
+                        page_title, section_title, raw_text = page_data
+                        resolved_doc_type = _infer_doc_type(
                             url=page_url,
                             title=page_title,
-                            section_title=section_title,
-                            raw_text=raw_text,
-                            version_range=request.version_range,
+                            default_doc_type=request.doc_type,
+                            include_doc_types=request.include_doc_types or [],
                         )
-                    )
+                        if resolved_doc_type is None:
+                            continue
+                        if (
+                            request.include_doc_types
+                            and resolved_doc_type not in request.include_doc_types
+                        ):
+                            continue
+                        candidates.append(
+                            VendorDocCandidate(
+                                doc_type=resolved_doc_type,
+                                authority="official",
+                                url=page_url,
+                                title=page_title,
+                                section_title=section_title,
+                                raw_text=raw_text,
+                                version_range=request.version_range,
+                            )
+                        )
 
-        return self.ingest_candidates(
-            package_name=package_name,
-            ecosystem=ecosystem,
-            candidates=candidates,
-            ingest_source="vendor_docs_discovery",
-        )
+            written = self.ingest_candidates(
+                package_name=package_name,
+                ecosystem=ecosystem,
+                candidates=candidates,
+                ingest_source="vendor_docs_discovery",
+            )
+            sync_state.mark_success(
+                run=run,
+                cursor_after=_serialize_discovery_targets(requests),
+                items_seen=len(candidates),
+                items_written=written,
+            )
+            return written
+        except Exception as exc:
+            sync_state.mark_failure(run=run, error=str(exc))
+            raise
 
     def ingest_candidates(
         self,
@@ -304,3 +345,19 @@ def _infer_doc_type(
     if not include_doc_types:
         return default_doc_type
     return None
+
+
+def _global_tenant_id() -> uuid.UUID:
+    return uuid.UUID("00000000-0000-0000-0000-000000000000")
+
+
+def _scope_key(package_name: str, ecosystem: str) -> str:
+    return f"{package_name}:{ecosystem}"
+
+
+def _serialize_fetch_targets(requests: list[VendorDocFetchRequest]) -> str:
+    return json.dumps(sorted(request.url for request in requests))
+
+
+def _serialize_discovery_targets(requests: list[VendorDocDiscoveryRequest]) -> str:
+    return json.dumps(sorted(request.index_url for request in requests))

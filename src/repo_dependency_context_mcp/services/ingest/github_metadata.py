@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from sqlalchemy.orm import Session
 
 from repo_dependency_context_mcp.services.ingest.change_metadata import ChangeMetadataIngestService
+from repo_dependency_context_mcp.services.ingest.sync_state import SyncStateService
 
 
 class GitHubMetadataIngestService:
@@ -33,22 +34,107 @@ class GitHubMetadataIngestService:
             headers["Authorization"] = f"Bearer {self.token}"
 
         with httpx.Client(base_url=self.base_url, headers=headers, timeout=10.0) as client:
-            pulls = client.get(f"/repos/{owner}/{repo_name}/pulls").json()
-            issues = client.get(f"/repos/{owner}/{repo_name}/issues").json()
-            commits = client.get(f"/repos/{owner}/{repo_name}/commits").json()
+            scope_base = f"{owner}/{repo_name}"
+            total = 0
+            total += self._ingest_resource(
+                client=client,
+                tenant_id=tenant_id,
+                repo_id=repo_id,
+                acl_scope=acl_scope,
+                source_kind="github_prs",
+                scope_key=f"{scope_base}:pulls",
+                cursor_kind="updated_at",
+                path=f"/repos/{owner}/{repo_name}/pulls",
+                normalize=self._normalize_pull,
+                timestamp_key="source_updated_at",
+                predicate=None,
+            )
+            total += self._ingest_resource(
+                client=client,
+                tenant_id=tenant_id,
+                repo_id=repo_id,
+                acl_scope=acl_scope,
+                source_kind="github_issues",
+                scope_key=f"{scope_base}:issues",
+                cursor_kind="updated_at",
+                path=f"/repos/{owner}/{repo_name}/issues",
+                normalize=self._normalize_issue,
+                timestamp_key="source_updated_at",
+                predicate=lambda item: not item.get("pull_request"),
+            )
+            total += self._ingest_resource(
+                client=client,
+                tenant_id=tenant_id,
+                repo_id=repo_id,
+                acl_scope=acl_scope,
+                source_kind="github_commits",
+                scope_key=f"{scope_base}:commits",
+                cursor_kind="committed_at",
+                path=f"/repos/{owner}/{repo_name}/commits",
+                normalize=self._normalize_commit,
+                timestamp_key="source_updated_at",
+                predicate=None,
+            )
+            return total
 
-        items = [
-            *[self._normalize_pull(item) for item in pulls],
-            *[self._normalize_issue(item) for item in issues if not item.get("pull_request")],
-            *[self._normalize_commit(item) for item in commits],
-        ]
-
-        return ChangeMetadataIngestService(self.session).ingest_items(
+    def _ingest_resource(
+        self,
+        client: httpx.Client,
+        tenant_id: uuid.UUID,
+        repo_id: uuid.UUID,
+        acl_scope: dict[str, Any],
+        source_kind: str,
+        scope_key: str,
+        cursor_kind: str,
+        path: str,
+        normalize: Callable[[dict[str, Any]], dict[str, Any]],
+        timestamp_key: str,
+        predicate: Callable[[dict[str, Any]], bool] | None,
+    ) -> int:
+        sync_state = SyncStateService(self.session)
+        run = sync_state.start_run(
             tenant_id=tenant_id,
             repo_id=repo_id,
-            items=items,
-            acl_scope=acl_scope,
+            source_kind=source_kind,
+            scope_key=scope_key,
+            cursor_kind=cursor_kind,
         )
+        cursor_before = run.cursor_before
+
+        try:
+            response = client.get(path)
+            response.raise_for_status()
+            payload = response.json()
+            if predicate is None:
+                filtered_items = payload
+            else:
+                filtered_items = [item for item in payload if predicate(item)]
+            normalized_items = [normalize(item) for item in filtered_items]
+            incremental_items = [
+                item
+                for item in normalized_items
+                if self._is_newer_than_cursor(item.get(timestamp_key), cursor_before)
+            ]
+            written = ChangeMetadataIngestService(self.session).ingest_items(
+                tenant_id=tenant_id,
+                repo_id=repo_id,
+                items=incremental_items,
+                acl_scope=acl_scope,
+            )
+            cursor_after = self._max_cursor_value(
+                [item.get(timestamp_key) for item in incremental_items],
+                cursor_before,
+            )
+            sync_state.mark_success(
+                run=run,
+                cursor_after=cursor_after,
+                items_seen=len(filtered_items),
+                items_written=written,
+            )
+            return written
+        except Exception as exc:
+            sync_state.mark_failure(run=run, error=str(exc))
+            raise
 
     def _normalize_pull(self, item: dict[str, Any]) -> dict[str, Any]:
         title = item["title"]
@@ -62,6 +148,7 @@ class GitHubMetadataIngestService:
             "body": body,
             "author": item.get("user", {}).get("login"),
             "labels": [label["name"] for label in item.get("labels", [])],
+            "source_updated_at": item.get("updated_at"),
             "merged_at": item.get("merged_at"),
             **related,
         }
@@ -78,6 +165,7 @@ class GitHubMetadataIngestService:
             "body": body,
             "author": item.get("user", {}).get("login"),
             "labels": [label["name"] for label in item.get("labels", [])],
+            "source_updated_at": item.get("updated_at"),
             "merged_at": None,
             **related,
         }
@@ -94,9 +182,27 @@ class GitHubMetadataIngestService:
             "body": "\n".join(message.splitlines()[1:]).strip(),
             "author": item.get("commit", {}).get("author", {}).get("name"),
             "labels": [],
+            "source_updated_at": item.get("commit", {}).get("author", {}).get("date"),
             "merged_at": None,
             **related,
         }
+
+    def _is_newer_than_cursor(self, candidate: str | None, cursor_before: str | None) -> bool:
+        if candidate is None:
+            return True
+        if cursor_before is None:
+            return True
+        return candidate > cursor_before
+
+    def _max_cursor_value(
+        self,
+        candidates: list[str | None],
+        cursor_before: str | None,
+    ) -> str | None:
+        values = [candidate for candidate in candidates if candidate is not None]
+        if not values:
+            return cursor_before
+        return max(values)
 
 
 def _extract_related_metadata(text: str) -> dict[str, list[str]]:
