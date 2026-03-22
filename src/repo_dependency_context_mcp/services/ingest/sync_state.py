@@ -160,6 +160,40 @@ class SyncStateService:
         self.session.commit()
         return managed_run
 
+    def get_latest_run(
+        self,
+        tenant_id: uuid.UUID,
+        repo_id: uuid.UUID | None,
+        source_kind: str,
+        scope_key: str,
+    ) -> SyncRun | None:
+        return self.session.execute(
+            select(SyncRun)
+            .where(
+                SyncRun.tenant_id == tenant_id,
+                SyncRun.repo_id == repo_id,
+                SyncRun.source_kind == source_kind,
+                SyncRun.scope_key == scope_key,
+            )
+            .order_by(SyncRun.created_at.desc())
+        ).scalars().first()
+
+    def list_latest_runs(self, limit: int = 10) -> list[SyncRun]:
+        return list(
+            self.session.execute(select(SyncRun).order_by(SyncRun.created_at.desc()).limit(limit))
+            .scalars()
+            .all()
+        )
+
+    def list_cursors(self, limit: int = 10) -> list[SyncCursor]:
+        return list(
+            self.session.execute(
+                select(SyncCursor).order_by(SyncCursor.updated_at.desc()).limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)

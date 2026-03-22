@@ -11,6 +11,7 @@ from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
 )
 from repo_dependency_context_mcp.services.eval.runner import EvalRunnerService
 from repo_dependency_context_mcp.services.ingest.github_metadata import GitHubMetadataIngestService
+from repo_dependency_context_mcp.services.ingest.sync_state import SyncStateService
 from repo_dependency_context_mcp.workers.celery_app import celery_app
 
 
@@ -22,15 +23,41 @@ def ingest_github_metadata_task(
     repo_name: str,
     acl_scope: dict,
     base_url: str | None = None,
-) -> int:
+) -> dict:
     with get_db_session() as session:
-        return GitHubMetadataIngestService(session, base_url=base_url or "https://api.github.com").ingest_repo_changes(
+        written = GitHubMetadataIngestService(
+            session,
+            base_url=base_url or "https://api.github.com",
+        ).ingest_repo_changes(
             tenant_id=uuid.UUID(tenant_id),
             repo_id=uuid.UUID(repo_id),
             owner=owner,
             repo_name=repo_name,
             acl_scope=acl_scope,
         )
+        sync_state = SyncStateService(session)
+        scope_key = f"{owner}/{repo_name}:pulls"
+        latest_run = sync_state.get_latest_run(
+            tenant_id=uuid.UUID(tenant_id),
+            repo_id=uuid.UUID(repo_id),
+            source_kind="github_prs",
+            scope_key=scope_key,
+        )
+        cursor = sync_state.get_cursor(
+            tenant_id=uuid.UUID(tenant_id),
+            repo_id=uuid.UUID(repo_id),
+            source_kind="github_prs",
+            scope_key=scope_key,
+        )
+        return {
+            "items_written": written,
+            "sync": {
+                "source_kind": "github_prs",
+                "scope_key": scope_key,
+                "status": latest_run.status if latest_run else None,
+                "cursor_value": cursor.cursor_value if cursor else None,
+            },
+        }
 
 
 @celery_app.task(name="rdcmcp.fetch_vendor_docs")
@@ -39,14 +66,41 @@ def fetch_vendor_docs_task(
     ecosystem: str,
     official_domains: dict[str, list[str]],
     requests: list[dict],
-) -> int:
+) -> dict:
     with get_db_session() as session:
         typed_requests = [VendorDocFetchRequest(**item) for item in requests]
-        return VendorDocIngestService(session, official_domains=official_domains).fetch_and_ingest(
+        written = VendorDocIngestService(
+            session,
+            official_domains=official_domains,
+        ).fetch_and_ingest(
             package_name=package_name,
             ecosystem=ecosystem,
             requests=typed_requests,
         )
+        sync_state = SyncStateService(session)
+        scope_key = f"{package_name}:{ecosystem}"
+        tenant_id = uuid.UUID("00000000-0000-0000-0000-000000000000")
+        latest_run = sync_state.get_latest_run(
+            tenant_id=tenant_id,
+            repo_id=None,
+            source_kind="vendor_docs",
+            scope_key=scope_key,
+        )
+        cursor = sync_state.get_cursor(
+            tenant_id=tenant_id,
+            repo_id=None,
+            source_kind="vendor_docs",
+            scope_key=scope_key,
+        )
+        return {
+            "items_written": written,
+            "sync": {
+                "source_kind": "vendor_docs",
+                "scope_key": scope_key,
+                "status": latest_run.status if latest_run else None,
+                "cursor_value": cursor.cursor_value if cursor else None,
+            },
+        }
 
 
 @celery_app.task(name="rdcmcp.discover_vendor_docs")
@@ -55,14 +109,41 @@ def discover_vendor_docs_task(
     ecosystem: str,
     official_domains: dict[str, list[str]],
     requests: list[dict],
-) -> int:
+) -> dict:
     with get_db_session() as session:
         typed_requests = [VendorDocDiscoveryRequest(**item) for item in requests]
-        return VendorDocIngestService(session, official_domains=official_domains).discover_and_ingest(
+        written = VendorDocIngestService(
+            session,
+            official_domains=official_domains,
+        ).discover_and_ingest(
             package_name=package_name,
             ecosystem=ecosystem,
             requests=typed_requests,
         )
+        sync_state = SyncStateService(session)
+        scope_key = f"{package_name}:{ecosystem}"
+        tenant_id = uuid.UUID("00000000-0000-0000-0000-000000000000")
+        latest_run = sync_state.get_latest_run(
+            tenant_id=tenant_id,
+            repo_id=None,
+            source_kind="vendor_docs",
+            scope_key=scope_key,
+        )
+        cursor = sync_state.get_cursor(
+            tenant_id=tenant_id,
+            repo_id=None,
+            source_kind="vendor_docs",
+            scope_key=scope_key,
+        )
+        return {
+            "items_written": written,
+            "sync": {
+                "source_kind": "vendor_docs",
+                "scope_key": scope_key,
+                "status": latest_run.status if latest_run else None,
+                "cursor_value": cursor.cursor_value if cursor else None,
+            },
+        }
 
 
 @celery_app.task(name="rdcmcp.run_eval")

@@ -116,7 +116,7 @@ def test_job_tasks_execute_existing_services(db_session, tmp_path: Path) -> None
             acl_scope={"visibility": "private"},
         )
 
-        github_count = ingest_github_metadata_task.run(
+        github_result = ingest_github_metadata_task.run(
             str(tenant.id),
             str(repo.id),
             "acme",
@@ -124,9 +124,10 @@ def test_job_tasks_execute_existing_services(db_session, tmp_path: Path) -> None
             {"visibility": "private"},
             f"http://127.0.0.1:{server.server_port}",
         )
-        assert github_count == 1
+        assert github_result["items_written"] == 1
+        assert github_result["sync"]["status"] == "completed"
 
-        vendor_count = fetch_vendor_docs_task.run(
+        vendor_result = fetch_vendor_docs_task.run(
             "fastapi",
             "python",
             {"fastapi": ["127.0.0.1"]},
@@ -138,9 +139,10 @@ def test_job_tasks_execute_existing_services(db_session, tmp_path: Path) -> None
                 }
             ],
         )
-        assert vendor_count == 1
+        assert vendor_result["items_written"] == 1
+        assert vendor_result["sync"]["status"] == "completed"
 
-        discovered_count = discover_vendor_docs_task.run(
+        discovered_result = discover_vendor_docs_task.run(
             "fastapi",
             "python",
             {"fastapi": ["127.0.0.1"]},
@@ -155,7 +157,8 @@ def test_job_tasks_execute_existing_services(db_session, tmp_path: Path) -> None
                 }
             ],
         )
-        assert discovered_count == 2
+        assert discovered_result["items_written"] == 2
+        assert discovered_result["sync"]["status"] == "completed"
 
         dataset_path = tmp_path / "eval.yaml"
         dataset_path.write_text(
