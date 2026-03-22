@@ -3,7 +3,9 @@ from pathlib import Path
 from sqlalchemy import select
 
 from repo_dependency_context_mcp.db.models import QueryLog, QueryResult, Repo, Tenant
+from repo_dependency_context_mcp.services.ingest import local_repo as local_repo_module
 from repo_dependency_context_mcp.services.ingest.local_repo import LocalRepoIngestService
+from repo_dependency_context_mcp.services.retrieval import search as search_module
 from repo_dependency_context_mcp.services.retrieval.search import SearchContextService
 
 
@@ -151,3 +153,85 @@ def test_search_context_prefers_repo_code_for_locate_queries(db_session, tmp_pat
 
     assert response["evidence"][0]["source_type"] == "repo_code"
     assert response["evidence"][0]["path_or_url"] == "src/auth.py"
+
+
+def test_search_context_adds_dense_only_candidates_to_hybrid_pool(
+    db_session,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "sample_repo_dense_bridge"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "docs").mkdir()
+
+    (repo_root / "src" / "guards.py").write_text(
+        "\n".join(
+            [
+                "def guardian_check(user):",
+                "    if not user.get('elevated_access'):",
+                "        raise PermissionError('guardian sentinel only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    for index in range(30):
+        (repo_root / "docs" / f"guide_{index}.md").write_text(
+            "\n".join(
+                [
+                    "# Lookup Guide",
+                    "",
+                    "Privilege gate semantic lookup reference page.",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_embed_text(text: str, settings=None) -> list[float]:
+        vector = [0.0] * 1536
+        normalized = text.lower()
+        if "where is privilege gate semantic lookup implemented" in normalized:
+            vector[0] = 1.0
+        elif "guardian sentinel" in normalized or "elevated_access" in normalized:
+            vector[0] = 1.0
+        elif "privilege gate semantic lookup" in normalized:
+            vector[1] = 1.0
+        return vector
+
+    monkeypatch.setattr(local_repo_module, "embed_text", fake_embed_text)
+    monkeypatch.setattr(search_module, "embed_text", fake_embed_text)
+
+    tenant = Tenant(name="Tenant Dense Bridge", slug="tenant-dense-bridge")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-dense-bridge",
+        provider="local",
+        external_id="sample-repo-dense-bridge",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    response = SearchContextService(db_session).search_context(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        query="where is privilege gate semantic lookup implemented",
+        task_type="locate",
+        top_k=35,
+    )
+
+    evidence_paths = {item["path_or_url"] for item in response["evidence"]}
+    assert "src/guards.py" in evidence_paths
