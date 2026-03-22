@@ -71,5 +71,23 @@ jobs:
       - name: Apply migrations
         run: python -m alembic upgrade head
 
+      - name: Seed demo data for smoke
+        run: |
+          python scripts/seed_demo.py > smoke-seed.json
+          python -c "import json, os, pathlib; data = json.loads(pathlib.Path('smoke-seed.json').read_text()); pathlib.Path(os.environ['GITHUB_ENV']).write_text(f'RDCMCP_SMOKE_TENANT_ID={data[\"tenant_id\"]}\nRDCMCP_SMOKE_REPO_ID={data[\"repo_id\"]}\n', encoding='utf-8', newline='\n')"
+
+      - name: Start API for smoke
+        run: |
+          python -m uvicorn repo_dependency_context_mcp.main:app --host 127.0.0.1 --port 8000 --app-dir src &
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8000/healthz && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Run smoke script
+        shell: pwsh
+        run: ./scripts/smoke.ps1
+
       - name: Run tests
         run: pytest

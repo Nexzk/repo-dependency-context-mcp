@@ -8,6 +8,9 @@ The repository includes a minimal GitHub Actions workflow at `.github/workflows/
 - starts Redis
 - installs project dependencies
 - applies Alembic migrations
+- seeds demo data for smoke
+- starts the FastAPI app and waits for `/healthz`
+- runs `scripts/smoke.ps1`
 - runs `pytest`
 
 ## Current Scope
@@ -18,7 +21,6 @@ The test suite still uses a shared PostgreSQL database. Test fixture setup now t
 
 It does not yet enforce:
 
-- smoke script execution
 - MCP transport smoke checks
 
 ## Why This Is Enough For Now
@@ -29,6 +31,7 @@ The highest-value signal for this MVP is still:
 2. services import
 3. database-backed tests pass
 4. end-to-end retrieval and eval flows stay green
+5. basic live API smoke checks remain green
 
 ## Current Quality Gates
 
