@@ -88,6 +88,7 @@ class VendorDocIngestService:
         requests: list[VendorDocDiscoveryRequest],
     ) -> int:
         candidates: list[VendorDocCandidate] = []
+        seen_urls: set[str] = set()
         with httpx.Client(follow_redirects=True, timeout=10.0) as client:
             for request in requests:
                 allowed_domains = self.official_domains.get(package_name, [])
@@ -107,8 +108,14 @@ class VendorDocIngestService:
                     max_pages=request.max_pages,
                 )
                 for page_url in page_urls:
-                    page_response = client.get(page_url)
-                    page_response.raise_for_status()
+                    if page_url in seen_urls:
+                        continue
+                    try:
+                        page_response = client.get(page_url)
+                        page_response.raise_for_status()
+                    except Exception:
+                        continue
+                    seen_urls.add(page_url)
                     page_parser = _SimpleHtmlDocParser()
                     page_parser.feed(page_response.text)
                     resolved_doc_type = _infer_doc_type(
@@ -149,8 +156,12 @@ class VendorDocIngestService:
     ) -> int:
         allowed_domains = self.official_domains.get(package_name, [])
         accepted = 0
+        seen_urls: set[str] = set()
 
         for candidate in candidates:
+            if candidate.url in seen_urls:
+                continue
+            seen_urls.add(candidate.url)
             if not self._is_allowed_domain(candidate.url, allowed_domains):
                 continue
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from sqlalchemy.orm import Session
+
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
@@ -183,3 +186,194 @@ def test_vendor_doc_fetcher_discovers_and_batches_multiple_whitelisted_pages(db_
     finally:
         server.shutdown()
         server.server_close()
+def test_discover_and_ingest_deduplicates_same_batch_urls(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = {
+        "https://docs.example.com/docs/index": """
+        <html><body>
+            <a href="/docs/changelog/v1">Release Notes</a>
+            <a href="/docs/changelog/v1">Release Notes Duplicate</a>
+        </body></html>
+        """,
+        "https://docs.example.com/docs/changelog/v1": """
+        <html><head><title>Release Notes</title></head><body>
+            <h1>v1 Release Notes</h1>
+            <p>Important changes</p>
+        </body></html>
+        """,
+    }
+    service = VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["docs.example.com"]},
+    )
+    monkeypatch.setattr(
+        "repo_dependency_context_mcp.services.dependencies.vendor_docs.httpx.Client",
+        lambda *args, **kwargs: FakeHttpClient(responses),
+    )
+
+    result = service.discover_and_ingest(
+        "fastapi",
+        "python",
+        [
+            _make_discovery_request(
+                version_range=">=0.110,<1.0",
+                index_url="https://docs.example.com/docs/index",
+                doc_type="release_notes",
+                allowed_domains=("docs.example.com",),
+                include_url_prefixes=("https://docs.example.com/docs/",),
+                include_doc_types=("release_notes",),
+                max_pages=10,
+            )
+        ],
+    )
+
+    assert result == 1
+    docs = db_session.scalars(select(DependencyDoc)).all()
+    assert len(docs) == 1
+    assert docs[0].url == "https://docs.example.com/docs/changelog/v1"
+
+
+def test_discover_and_ingest_skips_failed_pages_and_continues(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = {
+        "https://docs.example.com/docs/index": """
+        <html><body>
+            <a href="/docs/changelog/v1">Release Notes</a>
+            <a href="/docs/migration/v2">Migration Guide</a>
+            <a href="/docs/changelog/missing">Missing Release Notes</a>
+        </body></html>
+        """,
+        "https://docs.example.com/docs/changelog/v1": """
+        <html><head><title>Release Notes</title></head><body>
+            <h1>v1 Release Notes</h1>
+            <p>Important changes</p>
+        </body></html>
+        """,
+        "https://docs.example.com/docs/migration/v2": """
+        <html><head><title>Migration Guide</title></head><body>
+            <h1>v2 Migration Guide</h1>
+            <p>Upgrade steps</p>
+        </body></html>
+        """,
+    }
+    service = VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["docs.example.com"]},
+    )
+    monkeypatch.setattr(
+        "repo_dependency_context_mcp.services.dependencies.vendor_docs.httpx.Client",
+        lambda *args, **kwargs: FakeHttpClient(
+            responses,
+            status_codes={
+                "https://docs.example.com/docs/changelog/missing": 404,
+            },
+        ),
+    )
+
+    result = service.discover_and_ingest(
+        "fastapi",
+        "python",
+        [
+            _make_discovery_request(
+                version_range=">=0.110,<1.0",
+                index_url="https://docs.example.com/docs/index",
+                doc_type="release_notes",
+                allowed_domains=("docs.example.com",),
+                include_url_prefixes=("https://docs.example.com/docs/",),
+                include_doc_types=("release_notes", "migration_guide"),
+                max_pages=10,
+            )
+        ],
+    )
+
+    assert result == 2
+    docs = db_session.scalars(select(DependencyDoc)).all()
+    assert {doc.url for doc in docs} == {
+        "https://docs.example.com/docs/changelog/v1",
+        "https://docs.example.com/docs/migration/v2",
+    }
+
+
+def test_ingest_candidates_deduplicates_same_batch_urls(
+    db_session: Session,
+) -> None:
+    service = VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["docs.example.com"]},
+    )
+
+    result = service.ingest_candidates(
+        "fastapi",
+        "python",
+        [
+            _make_candidate(
+                url="https://docs.example.com/docs/changelog/v1",
+                doc_type="release_notes",
+                version_range=">=0.110,<1.0",
+                title="Release Notes",
+                section_title="v1",
+                raw_text="Important changes",
+            ),
+            _make_candidate(
+                url="https://docs.example.com/docs/changelog/v1",
+                doc_type="release_notes",
+                version_range=">=0.110,<1.0",
+                title="Release Notes",
+                section_title="v1",
+                raw_text="Important changes",
+            ),
+        ],
+    )
+
+    assert result == 1
+    docs = db_session.scalars(select(DependencyDoc)).all()
+    assert len(docs) == 1
+    assert docs[0].url == "https://docs.example.com/docs/changelog/v1"
+
+
+class FakeHttpResponse:
+    def __init__(
+        self,
+        text: str,
+        status_code: int = 200,
+    ) -> None:
+        self.text = text
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class FakeHttpClient:
+    def __init__(
+        self,
+        responses: dict[str, str],
+        status_codes: dict[str, int] | None = None,
+    ) -> None:
+        self._responses = responses
+        self._status_codes = status_codes or {}
+
+    def get(self, url: str) -> FakeHttpResponse:
+        return FakeHttpResponse(
+            text=self._responses.get(url, ""),
+            status_code=self._status_codes.get(url, 200),
+        )
+
+    def __enter__(self) -> "FakeHttpClient":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        return None
+
+
+def _make_discovery_request(**kwargs: object) -> object:
+    return type("DiscoveryRequest", (), kwargs)()
+
+
+def _make_candidate(**kwargs: object) -> object:
+    return type("VendorDocCandidate", (), kwargs)()
