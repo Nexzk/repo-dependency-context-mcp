@@ -160,3 +160,9 @@ cases:
         "top_source_ok",
     }
     assert latest_failure["top_evidence_sources"]
+
+    playground = client.get("/playground")
+    assert playground.status_code == 200
+    assert "Latest Eval" in playground.text
+    assert "missing_auth" in playground.text
+    assert "must_hit_sources" in playground.text
