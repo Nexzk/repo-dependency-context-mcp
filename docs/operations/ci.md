@@ -33,7 +33,18 @@ The highest-value signal for this MVP is still:
 - `ruff check src tests scripts --select F,I`
 - focused MyPy on:
   - `src/repo_dependency_context_mcp/config.py`
+  - `src/repo_dependency_context_mcp/services/ingest/change_metadata.py`
+  - `src/repo_dependency_context_mcp/services/ingest/github_metadata.py`
+  - `src/repo_dependency_context_mcp/services/dependencies/vendor_docs.py`
+  - `src/repo_dependency_context_mcp/services/mcp/tools.py`
   - `src/repo_dependency_context_mcp/services/retrieval/embedding_provider.py`
   - `src/repo_dependency_context_mcp/services/retrieval/rerank_provider.py`
 
-The MyPy scope is intentionally narrow because the repository still has broader MVP-grade typing debt. The current target set covers the highest-value provider configuration and abstraction surfaces without turning CI into constant noise.
+The MyPy scope is intentionally narrow because the repository still has broader MVP-grade typing debt. The current target set now covers:
+
+- provider configuration and abstraction surfaces
+- hardened ingest metadata paths
+- vendor docs discovery and batch sync logic
+- related-change ranking logic
+
+Ruff intentionally remains on `F,I` only. Expanding it to include `E` right now would turn CI noisy because the repository still has broad line-length debt that does not materially affect runtime correctness.

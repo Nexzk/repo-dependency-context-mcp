@@ -61,6 +61,10 @@ jobs:
           --ignore-missing-imports
           --follow-imports=silent
           src/repo_dependency_context_mcp/config.py
+          src/repo_dependency_context_mcp/services/ingest/change_metadata.py
+          src/repo_dependency_context_mcp/services/ingest/github_metadata.py
+          src/repo_dependency_context_mcp/services/dependencies/vendor_docs.py
+          src/repo_dependency_context_mcp/services/mcp/tools.py
           src/repo_dependency_context_mcp/services/retrieval/embedding_provider.py
           src/repo_dependency_context_mcp/services/retrieval/rerank_provider.py
 
