@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from repo_dependency_context_mcp.db.models import Chunk, Document, IngestJob, Repo, Source
 from repo_dependency_context_mcp.services.chunking.code import chunk_python_file
 from repo_dependency_context_mcp.services.chunking.markdown import chunk_markdown_file
+from repo_dependency_context_mcp.services.ingest.sync_state import SyncStateService
 from repo_dependency_context_mcp.services.retrieval.embedding import embed_text
 
 SUPPORTED_SUFFIXES = {
@@ -41,6 +42,15 @@ class LocalRepoIngestService:
     ) -> IngestSummary:
         repo = self.session.get_bind()
         del repo
+        sync_state = SyncStateService(self.session)
+        scope_key = f"{repo_id}:working_tree"
+        sync_run = sync_state.start_run(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            source_kind="local_repo",
+            scope_key=scope_key,
+            cursor_kind="repo_snapshot",
+        )
 
         ingest_job = IngestJob(
             tenant_id=tenant_id,
@@ -55,15 +65,19 @@ class LocalRepoIngestService:
         source_count = 0
         document_count = 0
         chunk_count = 0
+        items_seen = 0
+        snapshot_parts: list[str] = []
 
         try:
             for file_path in sorted(repo_path.rglob("*")):
                 if not file_path.is_file() or file_path.suffix not in SUPPORTED_SUFFIXES:
                     continue
 
+                items_seen += 1
                 source_type, language = SUPPORTED_SUFFIXES[file_path.suffix]
                 relative_path = file_path.relative_to(repo_path).as_posix()
                 raw_text = file_path.read_text(encoding="utf-8")
+                snapshot_parts.append(f"{relative_path}:{_checksum(raw_text)}")
                 if not raw_text.strip():
                     continue
                 checksum = _checksum(raw_text)
@@ -73,7 +87,10 @@ class LocalRepoIngestService:
                     source_type=source_type,
                     relative_path=relative_path,
                 )
-                if source is not None and self._source_has_checksum(source_id=source.id, checksum=checksum):
+                if (
+                    source is not None
+                    and self._source_has_checksum(source_id=source.id, checksum=checksum)
+                ):
                     continue
 
                 if source is None:
@@ -135,7 +152,7 @@ class LocalRepoIngestService:
                     )
                     self.session.add(chunk)
                     chunk_count += 1
-        except Exception:
+        except Exception as exc:
             self.session.rollback()
             failed_job = self.session.get(IngestJob, ingest_job.id)
             if failed_job is not None:
@@ -145,6 +162,7 @@ class LocalRepoIngestService:
                 failed_job.status = "failed"
                 failed_job.finished_at = datetime.now(UTC)
                 self.session.commit()
+            sync_state.mark_failure(sync_run, error=str(exc))
             raise
 
         ingest_job = self.session.get(IngestJob, ingest_job.id)
@@ -154,7 +172,17 @@ class LocalRepoIngestService:
             ingest_job.status = "completed"
             ingest_job.finished_at = datetime.now(UTC)
         self.session.commit()
-        return IngestSummary(source_count=source_count, document_count=document_count, chunk_count=chunk_count)
+        sync_state.mark_success(
+            run=sync_run,
+            cursor_after=_repo_snapshot(snapshot_parts),
+            items_seen=items_seen,
+            items_written=source_count,
+        )
+        return IngestSummary(
+            source_count=source_count,
+            document_count=document_count,
+            chunk_count=chunk_count,
+        )
 
     def _get_repo_name(self, repo_id: uuid.UUID) -> str:
         row = self.session.execute(select(Repo.name).where(Repo.id == repo_id)).scalar_one()
@@ -205,3 +233,8 @@ def _guess_mime_type(file_path: Path, language: str) -> str:
         return "text/markdown"
     guessed, _ = mimetypes.guess_type(file_path.name)
     return guessed or "text/plain"
+
+
+def _repo_snapshot(snapshot_parts: list[str]) -> str:
+    payload = "\n".join(sorted(snapshot_parts))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
