@@ -15,6 +15,8 @@ Turn the MVP into a more durable internal system by improving sync correctness, 
 
 ## Workstream 1: Incremental Sync and Job State
 
+Status: completed on branch `phase2-hardening-and-sync`
+
 ### Scope
 
 - persist sync cursors/checkpoints for:
@@ -39,6 +41,8 @@ Turn the MVP into a more durable internal system by improving sync correctness, 
 - ingest job rows show meaningful status transitions
 
 ## Workstream 2: Stronger Related Changes
+
+Status: completed on branch `phase2-hardening-and-sync`
 
 ### Scope
 
@@ -90,6 +94,8 @@ Status: completed on branch `phase2-hardening-and-sync`
 
 ## Workstream 4: Quality Gate Expansion
 
+Status: partially completed on branch `phase2-hardening-and-sync`
+
 ### Scope
 
 - widen Ruff coverage beyond `F,I`
@@ -106,6 +112,22 @@ Status: completed on branch `phase2-hardening-and-sync`
 
 - CI remains high signal
 - new enforcement does not create permanent flaky failures
+
+Implemented so far:
+
+- focused MyPy expanded from provider-only coverage to include:
+  - `services/ingest/change_metadata.py`
+  - `services/ingest/github_metadata.py`
+  - `services/dependencies/vendor_docs.py`
+  - `services/mcp/tools.py`
+- Ruff remains intentionally limited to `F,I`
+- shared test database cleanup now uses a PostgreSQL advisory lock to avoid local deadlocks across overlapping `pytest` runs
+
+Remaining:
+
+- decide whether to widen Ruff beyond `F,I` after line-length debt is reduced
+- decide whether to expand MyPy coverage beyond the current high-signal service set
+- optionally add smoke execution to CI
 
 ## Suggested Execution Order
 
