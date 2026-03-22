@@ -31,6 +31,8 @@ def metrics() -> dict:
             int(run.summary_json.get("failed_case_count", 0))
             for run in latest_eval_runs
         )
+        recent_eval_score_trend = build_recent_eval_score_trend(latest_eval_runs)
+        recent_eval_score_summary = summarize_recent_eval_scores(latest_eval_runs)
         return {
             "ingest_jobs": session.scalar(select(func.count()).select_from(IngestJob)) or 0,
             "query_logs": session.scalar(select(func.count()).select_from(QueryLog)) or 0,
@@ -45,6 +47,8 @@ def metrics() -> dict:
             "recent_eval_check_failures": recent_eval_check_failures,
             "recent_eval_failed_cases": recent_eval_failed_cases,
             "recent_eval_window": len(latest_eval_runs),
+            "recent_eval_score_trend": recent_eval_score_trend,
+            "recent_eval_score_summary": recent_eval_score_summary,
             "latest_sync_runs": [
                 {
                     "source_kind": run.source_kind,
@@ -121,3 +125,42 @@ def aggregate_recent_eval_check_failures(runs: list[EvalRun]) -> dict[str, int]:
             }
         )
     return dict(counter)
+
+
+def build_recent_eval_score_trend(runs: list[EvalRun]) -> list[dict]:
+    return [
+        {
+            "dataset_id": str(run.dataset_id),
+            "overall_score": float(run.summary_json.get("overall_score", 0.0)),
+            "retrieval_score": float(run.summary_json.get("retrieval_score", 0.0)),
+            "evidence_contract_score": float(
+                run.summary_json.get("evidence_contract_score", 0.0)
+            ),
+            "failed_case_count": int(run.summary_json.get("failed_case_count", 0)),
+        }
+        for run in runs
+    ]
+
+
+def summarize_recent_eval_scores(runs: list[EvalRun]) -> dict:
+    if not runs:
+        return {
+            "window": 0,
+            "avg_overall_score": 0.0,
+            "avg_retrieval_score": 0.0,
+            "avg_evidence_contract_score": 0.0,
+        }
+
+    overall_scores = [float(run.summary_json.get("overall_score", 0.0)) for run in runs]
+    retrieval_scores = [float(run.summary_json.get("retrieval_score", 0.0)) for run in runs]
+    evidence_scores = [
+        float(run.summary_json.get("evidence_contract_score", 0.0))
+        for run in runs
+    ]
+    count = len(runs)
+    return {
+        "window": count,
+        "avg_overall_score": sum(overall_scores) / count,
+        "avg_retrieval_score": sum(retrieval_scores) / count,
+        "avg_evidence_contract_score": sum(evidence_scores) / count,
+    }

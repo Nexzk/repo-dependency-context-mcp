@@ -256,3 +256,96 @@ cases:
     assert payload["recent_eval_failed_cases"] >= 2
     assert payload["recent_eval_check_failures"]["top_source_ok"] >= 2
     assert payload["recent_eval_check_failures"]["must_hit_sources"] >= 1
+
+
+def test_metrics_exposes_recent_eval_score_trend(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_trend"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Obs Trend", slug="tenant-obs-trend")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-trend",
+        provider="local",
+        external_id="sample-repo-trend",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    success_dataset = tmp_path / "eval_success.yaml"
+    success_dataset.write_text(
+        f"""
+name: obs-eval-success
+description: successful eval
+cases:
+  - id: locate_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+    EvalRunnerService(db_session).run_from_yaml(success_dataset)
+
+    failure_dataset = tmp_path / "eval_failure.yaml"
+    failure_dataset.write_text(
+        f"""
+name: obs-eval-failure
+description: failing eval
+cases:
+  - id: missing_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/missing.py
+    expected_top_source: repo_code:src/missing.py
+""".strip(),
+        encoding="utf-8",
+    )
+    EvalRunnerService(db_session).run_from_yaml(failure_dataset)
+
+    client = TestClient(app)
+    metrics = client.get("/api/observability/metrics")
+
+    assert metrics.status_code == 200
+    payload = metrics.json()
+    assert len(payload["recent_eval_score_trend"]) >= 2
+    assert payload["recent_eval_score_summary"]["window"] >= 2
+    assert isinstance(payload["recent_eval_score_summary"]["avg_overall_score"], float)
+    assert isinstance(payload["recent_eval_score_summary"]["avg_retrieval_score"], float)
+    assert isinstance(
+        payload["recent_eval_score_summary"]["avg_evidence_contract_score"],
+        float,
+    )
