@@ -7,7 +7,15 @@ from threading import Thread
 
 from sqlalchemy import func, select
 
-from repo_dependency_context_mcp.db.models import DependencyDoc, EvalRun, Repo, Source, Tenant
+from repo_dependency_context_mcp.db.models import (
+    DependencyDoc,
+    EvalRun,
+    Repo,
+    Source,
+    SyncCursor,
+    SyncRun,
+    Tenant,
+)
 from repo_dependency_context_mcp.services.ingest.local_repo import LocalRepoIngestService
 from repo_dependency_context_mcp.workers.tasks.jobs import (
     discover_vendor_docs_task,
@@ -32,10 +40,28 @@ class _GitHubHandler(BaseHTTPRequestHandler):
             ],
             "/repos/acme/sample/issues": [],
             "/repos/acme/sample/commits": [],
-            "/release-notes": "<html><head><title>FastAPI Release Notes</title></head><body><main><h1>FastAPI Release Notes</h1><p>Official migration details.</p></main></body></html>",
-            "/docs": "<html><head><title>Docs Index</title></head><body><main><a href=\"/docs/release-notes\">Release Notes</a><a href=\"/docs/migration-guide\">Migration Guide</a><a href=\"https://example.com/community-guide\">Community Guide</a></main></body></html>",
-            "/docs/release-notes": "<html><head><title>FastAPI Release Notes</title></head><body><main><h1>FastAPI Release Notes</h1><p>Official release notes.</p></main></body></html>",
-            "/docs/migration-guide": "<html><head><title>FastAPI Migration Guide</title></head><body><main><h1>FastAPI Migration Guide</h1><p>Official migration guide.</p></main></body></html>",
+            "/release-notes": """
+            <html><head><title>FastAPI Release Notes</title></head>
+            <body><main><h1>FastAPI Release Notes</h1>
+            <p>Official migration details.</p></main></body></html>
+            """.strip(),
+            "/docs": """
+            <html><head><title>Docs Index</title></head><body><main>
+            <a href="/docs/release-notes">Release Notes</a>
+            <a href="/docs/migration-guide">Migration Guide</a>
+            <a href="https://example.com/community-guide">Community Guide</a>
+            </main></body></html>
+            """.strip(),
+            "/docs/release-notes": """
+            <html><head><title>FastAPI Release Notes</title></head>
+            <body><main><h1>FastAPI Release Notes</h1>
+            <p>Official release notes.</p></main></body></html>
+            """.strip(),
+            "/docs/migration-guide": """
+            <html><head><title>FastAPI Migration Guide</title></head>
+            <body><main><h1>FastAPI Migration Guide</h1>
+            <p>Official migration guide.</p></main></body></html>
+            """.strip(),
         }
         route = routes.get(self.path)
         if isinstance(route, str):
@@ -153,9 +179,22 @@ cases:
         eval_summary = run_eval_task.run(str(dataset_path))
         assert eval_summary["case_count"] == 1
 
-        assert db_session.scalar(select(func.count()).select_from(Source).where(Source.source_type == "pr")) == 1
+        assert db_session.scalar(
+            select(func.count()).select_from(Source).where(Source.source_type == "pr")
+        ) == 1
         assert db_session.scalar(select(func.count()).select_from(DependencyDoc)) == 3
         assert db_session.scalar(select(func.count()).select_from(EvalRun)) == 1
+        assert db_session.scalar(
+            select(func.count()).select_from(SyncRun).where(SyncRun.source_kind == "github_prs")
+        ) == 1
+        assert db_session.scalar(
+            select(func.count()).select_from(SyncRun).where(SyncRun.source_kind == "vendor_docs")
+        ) == 2
+        assert db_session.scalar(
+            select(func.count())
+            .select_from(SyncCursor)
+            .where(SyncCursor.source_kind == "vendor_docs")
+        ) == 1
     finally:
         server.shutdown()
         server.server_close()

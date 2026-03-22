@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
@@ -7,7 +8,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from repo_dependency_context_mcp.db.models import DependencyDoc
+from repo_dependency_context_mcp.db.models import DependencyDoc, SyncCursor, SyncRun
 from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
     VendorDocDiscoveryRequest,
     VendorDocFetchRequest,
@@ -125,6 +126,24 @@ def test_vendor_doc_fetcher_fetches_whitelisted_html_and_persists(db_session) ->
         assert doc.title == "FastAPI Release Notes"
         assert "Official migration details for FastAPI 0.115." in doc.raw_text
         assert doc.metadata_json["ingest_source"] == "vendor_docs_fetcher"
+
+        cursor = db_session.scalar(
+            select(SyncCursor).where(
+                SyncCursor.source_kind == "vendor_docs",
+                SyncCursor.scope_key == "fastapi:python",
+            )
+        )
+        run = db_session.scalar(
+            select(SyncRun).where(
+                SyncRun.source_kind == "vendor_docs",
+                SyncRun.scope_key == "fastapi:python",
+            )
+        )
+        assert cursor is not None
+        assert cursor.last_success_at is not None
+        assert run is not None
+        assert run.status == "completed"
+        assert run.items_written == 1
     finally:
         server.shutdown()
         server.server_close()
@@ -390,6 +409,71 @@ def test_discover_and_ingest_allows_same_page_across_request_filters(
     assert docs[0].url == "https://docs.example.com/docs/migration/v2"
 
 
+def test_vendor_doc_failure_records_run_and_preserves_cursor(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["docs.example.com"]},
+    )
+    existing_cursor = SyncCursor(
+        tenant_id=_nil_uuid(),
+        repo_id=None,
+        source_kind="vendor_docs",
+        scope_key="fastapi:python",
+        cursor_kind="request_targets",
+        cursor_value='["https://docs.example.com/docs/index"]',
+    )
+    db_session.add(existing_cursor)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "repo_dependency_context_mcp.services.dependencies.vendor_docs.httpx.Client",
+        lambda *args, **kwargs: FakeHttpClient(
+            {},
+            status_codes={"https://docs.example.com/docs/index": 500},
+        ),
+    )
+
+    with pytest.raises(RuntimeError):
+        service.discover_and_ingest(
+            "fastapi",
+            "python",
+            [
+                _make_discovery_request(
+                    version_range=">=0.110,<1.0",
+                    index_url="https://docs.example.com/docs/index",
+                    doc_type="release_notes",
+                    include_url_prefixes=("https://docs.example.com/docs/",),
+                    include_doc_types=("release_notes",),
+                    max_pages=10,
+                )
+            ],
+        )
+
+    cursor = db_session.scalar(
+        select(SyncCursor).where(
+            SyncCursor.source_kind == "vendor_docs",
+            SyncCursor.scope_key == "fastapi:python",
+        )
+    )
+    failed_run = db_session.scalars(
+        select(SyncRun)
+        .where(
+            SyncRun.source_kind == "vendor_docs",
+            SyncRun.scope_key == "fastapi:python",
+        )
+        .order_by(SyncRun.created_at.desc())
+    ).first()
+
+    assert cursor is not None
+    assert cursor.cursor_value == '["https://docs.example.com/docs/index"]'
+    assert cursor.last_failure_at is not None
+    assert failed_run is not None
+    assert failed_run.status == "failed"
+
+
 class FakeHttpResponse:
     def __init__(
         self,
@@ -432,3 +516,7 @@ def _make_discovery_request(**kwargs: object) -> object:
 
 def _make_candidate(**kwargs: object) -> object:
     return type("VendorDocCandidate", (), kwargs)()
+
+
+def _nil_uuid() -> uuid.UUID:
+    return uuid.UUID("00000000-0000-0000-0000-000000000000")
