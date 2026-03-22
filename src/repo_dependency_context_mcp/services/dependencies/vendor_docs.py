@@ -117,10 +117,9 @@ class VendorDocIngestService:
                         default_doc_type=request.doc_type,
                         include_doc_types=request.include_doc_types or [],
                     )
-                    if (
-                        request.include_doc_types
-                        and resolved_doc_type not in request.include_doc_types
-                    ):
+                    if resolved_doc_type is None:
+                        continue
+                    if request.include_doc_types and resolved_doc_type not in request.include_doc_types:
                         continue
                     candidates.append(
                         VendorDocCandidate(
@@ -273,11 +272,13 @@ def _infer_doc_type(
     title: str,
     default_doc_type: str,
     include_doc_types: list[str],
-) -> str:
+) -> str | None:
     haystack = f"{url} {title}".lower()
     candidates = include_doc_types or [default_doc_type]
     for candidate in candidates:
         normalized = candidate.replace("_", " ")
         if normalized in haystack or candidate.replace("_", "-") in haystack:
             return candidate
-    return default_doc_type
+    if not include_doc_types:
+        return default_doc_type
+    return None

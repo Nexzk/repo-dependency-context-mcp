@@ -38,6 +38,7 @@ class _DocHandler(BaseHTTPRequestHandler):
       <h1>Docs Index</h1>
       <a href="/docs/release-notes">Release Notes</a>
       <a href="/docs/migration-guide">Migration Guide</a>
+      <a href="/docs/reference-api">Reference API</a>
       <a href="https://example.com/community-guide">Community Guide</a>
     </main>
   </body>
@@ -63,6 +64,18 @@ class _DocHandler(BaseHTTPRequestHandler):
     <main>
       <h1>FastAPI Migration Guide</h1>
       <p>Migration guide for FastAPI 0.115.</p>
+    </main>
+  </body>
+</html>
+""".strip(),
+            "/docs/reference-api": """
+<!doctype html>
+<html>
+  <head><title>FastAPI Reference API</title></head>
+  <body>
+    <main>
+      <h1>Reference API</h1>
+      <p>Reference material that should not be ingested as release notes or a migration guide.</p>
     </main>
   </body>
 </html>
