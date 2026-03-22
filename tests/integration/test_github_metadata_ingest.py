@@ -6,7 +6,7 @@ from threading import Thread
 
 from sqlalchemy import select
 
-from repo_dependency_context_mcp.db.models import Document, Repo, Source, Tenant
+from repo_dependency_context_mcp.db.models import Chunk, Document, Repo, Source, Tenant
 from repo_dependency_context_mcp.services.ingest.github_metadata import GitHubMetadataIngestService
 
 
@@ -17,7 +17,7 @@ class _GitHubHandler(BaseHTTPRequestHandler):
                 {
                     "number": 101,
                     "title": "Harden admin middleware",
-                    "body": "Updates require_admin and related auth checks.",
+                    "body": "Updates require_admin in src/auth.py and related auth checks.",
                     "user": {"login": "alice"},
                     "labels": [{"name": "auth"}, {"name": "security"}],
                     "merged_at": "2026-03-20T00:00:00Z",
@@ -27,7 +27,7 @@ class _GitHubHandler(BaseHTTPRequestHandler):
                 {
                     "number": 77,
                     "title": "Admin route fails for privileged users",
-                    "body": "Possible regression around require_admin.",
+                    "body": "Possible regression around require_admin in src/auth.py.",
                     "user": {"login": "carol"},
                     "labels": [{"name": "bug"}],
                     "pull_request": None,
@@ -37,7 +37,7 @@ class _GitHubHandler(BaseHTTPRequestHandler):
                 {
                     "sha": "abc123",
                     "commit": {
-                        "message": "Refine require_admin guard",
+                        "message": "Refine require_admin guard in src/auth.py",
                         "author": {"name": "bob"},
                     }
                 }
@@ -96,8 +96,18 @@ def test_github_metadata_ingest_fetches_and_persists_changes(db_session) -> None
         assert {doc.title for doc in documents} == {
             "Admin route fails for privileged users",
             "Harden admin middleware",
-            "Refine require_admin guard",
+            "Refine require_admin guard in src/auth.py",
         }
+
+        chunks = db_session.scalars(select(Chunk).order_by(Chunk.chunk_type)).all()
+        chunk_by_type = {chunk.chunk_type: chunk for chunk in chunks}
+        for chunk in chunks:
+            assert chunk.metadata_json["related_file_paths"] == ["src/auth.py"]
+            assert chunk.metadata_json["related_symbols"] == ["require_admin"]
+
+        assert chunk_by_type["pr_summary"].metadata_json["source_pr_ref"] == "pr-101"
+        assert chunk_by_type["commit_summary"].metadata_json["source_commit_sha"] == "abc123"
+        assert chunk_by_type["issue_summary"].metadata_json["source_issue_ref"] == "issue-77"
     finally:
         server.shutdown()
         server.server_close()

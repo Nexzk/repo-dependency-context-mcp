@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import httpx
 from sqlalchemy.orm import Session
@@ -20,7 +21,7 @@ class GitHubMetadataIngestService:
         repo_id: uuid.UUID,
         owner: str,
         repo_name: str,
-        acl_scope: dict,
+        acl_scope: dict[str, Any],
     ) -> int:
         headers = {}
         if self.token:
@@ -44,55 +45,66 @@ class GitHubMetadataIngestService:
             acl_scope=acl_scope,
         )
 
-    def _normalize_pull(self, item: dict) -> dict:
+    def _normalize_pull(self, item: dict[str, Any]) -> dict[str, Any]:
         title = item["title"]
         body = item.get("body") or ""
-        related = _extract_related_paths(f"{title}\n{body}")
+        related = _extract_related_metadata(f"{title}\n{body}")
         return {
             "source_type": "pr",
             "external_ref": f"pr-{item['number']}",
+            "source_pr_ref": f"pr-{item['number']}",
             "title": title,
             "body": body,
             "author": item.get("user", {}).get("login"),
             "labels": [label["name"] for label in item.get("labels", [])],
             "merged_at": item.get("merged_at"),
-            "related_paths": related,
+            **related,
         }
 
-    def _normalize_issue(self, item: dict) -> dict:
+    def _normalize_issue(self, item: dict[str, Any]) -> dict[str, Any]:
         title = item["title"]
         body = item.get("body") or ""
-        related = _extract_related_paths(f"{title}\n{body}")
+        related = _extract_related_metadata(f"{title}\n{body}")
         return {
             "source_type": "issue",
             "external_ref": f"issue-{item['number']}",
+            "source_issue_ref": f"issue-{item['number']}",
             "title": title,
             "body": body,
             "author": item.get("user", {}).get("login"),
             "labels": [label["name"] for label in item.get("labels", [])],
             "merged_at": None,
-            "related_paths": related,
+            **related,
         }
 
-    def _normalize_commit(self, item: dict) -> dict:
+    def _normalize_commit(self, item: dict[str, Any]) -> dict[str, Any]:
         message = item.get("commit", {}).get("message", "")
-        related = _extract_related_paths(message)
+        related = _extract_related_metadata(message)
         return {
             "source_type": "commit",
             "external_ref": item["sha"],
+            "source_commit_sha": item["sha"],
+            "source_commit_ref": item["sha"],
             "title": message.splitlines()[0] if message else item["sha"],
             "body": "\n".join(message.splitlines()[1:]).strip(),
             "author": item.get("commit", {}).get("author", {}).get("name"),
             "labels": [],
             "merged_at": None,
-            "related_paths": related,
+            **related,
         }
 
 
-def _extract_related_paths(text: str) -> list[str]:
-    candidates: list[str] = []
+def _extract_related_metadata(text: str) -> dict[str, list[str]]:
+    file_paths: list[str] = []
+    symbols: list[str] = []
     for token in text.replace(",", " ").split():
         normalized = token.strip("()[]{}:;.")
-        if "/" in normalized or "_" in normalized:
-            candidates.append(normalized)
-    return sorted(set(candidates))
+        if "/" in normalized or "." in normalized:
+            file_paths.append(normalized)
+        elif "_" in normalized:
+            symbols.append(normalized)
+    return {
+        "related_paths": sorted(set([*file_paths, *symbols])),
+        "related_file_paths": sorted(set(file_paths)),
+        "related_symbols": sorted(set(symbols)),
+    }
