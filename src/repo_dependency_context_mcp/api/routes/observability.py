@@ -22,10 +22,8 @@ router = APIRouter(prefix="/api/observability", tags=["observability"])
 def metrics() -> dict:
     with get_db_session() as session:
         sync_state = SyncStateService(session)
-        latest_eval_runs = session.scalars(
-            select(EvalRun).order_by(desc(EvalRun.created_at)).limit(5)
-        ).all()
-        latest_eval_failures = _latest_eval_failures(session)
+        latest_eval_runs = list_latest_eval_runs(session, limit=5)
+        latest_eval_failures = list_latest_eval_failures(session)
         return {
             "ingest_jobs": session.scalar(select(func.count()).select_from(IngestJob)) or 0,
             "query_logs": session.scalar(select(func.count()).select_from(QueryLog)) or 0,
@@ -33,13 +31,7 @@ def metrics() -> dict:
             "sync_cursors": session.scalar(select(func.count()).select_from(SyncCursor)) or 0,
             "sync_runs": session.scalar(select(func.count()).select_from(SyncRun)) or 0,
             "latest_eval_runs": [
-                {
-                    "dataset_id": str(run.dataset_id),
-                    "status": run.status,
-                    "overall_score": run.summary_json.get("overall_score"),
-                    "failed_case_count": run.summary_json.get("failed_case_count", 0),
-                    "failing_checks": run.summary_json.get("failing_checks", {}),
-                }
+                _serialize_eval_run(run)
                 for run in latest_eval_runs
             ],
             "latest_eval_failures": latest_eval_failures,
@@ -64,7 +56,23 @@ def metrics() -> dict:
         }
 
 
-def _latest_eval_failures(session) -> list[dict]:
+def list_latest_eval_runs(session, limit: int = 5) -> list[EvalRun]:
+    return session.scalars(
+        select(EvalRun).order_by(desc(EvalRun.created_at)).limit(limit)
+    ).all()
+
+
+def _serialize_eval_run(run: EvalRun) -> dict:
+    return {
+        "dataset_id": str(run.dataset_id),
+        "status": run.status,
+        "overall_score": run.summary_json.get("overall_score"),
+        "failed_case_count": run.summary_json.get("failed_case_count", 0),
+        "failing_checks": run.summary_json.get("failing_checks", {}),
+    }
+
+
+def list_latest_eval_failures(session) -> list[dict]:
     latest_run = session.scalar(select(EvalRun).order_by(desc(EvalRun.created_at)).limit(1))
     if latest_run is None:
         return []
