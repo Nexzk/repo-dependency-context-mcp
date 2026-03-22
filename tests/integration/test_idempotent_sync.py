@@ -7,8 +7,18 @@ from threading import Thread
 
 from sqlalchemy import func, select
 
-from repo_dependency_context_mcp.db.models import Chunk, DependencyDoc, IngestJob, Repo, Source, Tenant
-from repo_dependency_context_mcp.services.dependencies.vendor_docs import VendorDocFetchRequest, VendorDocIngestService
+from repo_dependency_context_mcp.db.models import (
+    Chunk,
+    DependencyDoc,
+    IngestJob,
+    Repo,
+    Source,
+    Tenant,
+)
+from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
+    VendorDocFetchRequest,
+    VendorDocIngestService,
+)
 from repo_dependency_context_mcp.services.ingest.github_metadata import GitHubMetadataIngestService
 from repo_dependency_context_mcp.services.ingest.local_repo import LocalRepoIngestService
 

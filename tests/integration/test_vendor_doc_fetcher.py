@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import pytest
-from sqlalchemy.orm import Session
-
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
+import pytest
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from repo_dependency_context_mcp.db.models import DependencyDoc
 from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
