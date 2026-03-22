@@ -121,7 +121,10 @@ class SearchContextService:
                 Source,
                 cast(
                     func.ts_rank_cd(
-                        func.to_tsvector("simple", func.concat_ws(" ", Chunk.context_prefix, Chunk.text)),
+                        func.to_tsvector(
+                            "simple",
+                            func.concat_ws(" ", Chunk.context_prefix, Chunk.text),
+                        ),
                         ts_query,
                     ),
                     Float,
@@ -131,7 +134,15 @@ class SearchContextService:
             .join(Source, Source.id == Chunk.source_id)
             .where(Chunk.tenant_id == tenant_id)
             .where(Chunk.repo_id == repo_id if repo_id else Chunk.repo_id.is_(None))
-            .order_by(func.ts_rank_cd(func.to_tsvector("simple", func.concat_ws(" ", Chunk.context_prefix, Chunk.text)), ts_query).desc())
+            .order_by(
+                func.ts_rank_cd(
+                    func.to_tsvector(
+                        "simple",
+                        func.concat_ws(" ", Chunk.context_prefix, Chunk.text),
+                    ),
+                    ts_query,
+                ).desc()
+            )
             .limit(limit * 3)
         )
 
@@ -140,11 +151,20 @@ class SearchContextService:
         candidates: list[Candidate] = []
 
         for chunk, document, source, score_lexical in lexical_rows:
-            chunk_embedding = list(chunk.embedding) if chunk.embedding is not None else embed_text(chunk.text, self.settings)
+            chunk_embedding = (
+                list(chunk.embedding)
+                if chunk.embedding is not None
+                else embed_text(chunk.text, self.settings)
+            )
             score_dense = cosine_similarity(query_embedding, chunk_embedding)
             score_authority = 1.0 if chunk.authority in {"repo", "official"} else 0.5
             score_freshness = 1.0 if source.updated_at_source else 0.6
-            score_total = (float(score_lexical) * 0.6) + (score_dense * 0.25) + (score_authority * 0.1) + (score_freshness * 0.05)
+            score_total = (
+                (float(score_lexical) * 0.6)
+                + (score_dense * 0.25)
+                + (score_authority * 0.1)
+                + (score_freshness * 0.05)
+            )
             candidates.append(
                 Candidate(
                     chunk=chunk,
@@ -172,7 +192,14 @@ class SearchContextService:
         )
         fallback_rows = self.session.execute(fallback_stmt).all()
         for chunk, document, source in fallback_rows:
-            score_dense = cosine_similarity(query_embedding, list(chunk.embedding) if chunk.embedding is not None else embed_text(chunk.text, self.settings))
+            score_dense = cosine_similarity(
+                query_embedding,
+                (
+                    list(chunk.embedding)
+                    if chunk.embedding is not None
+                    else embed_text(chunk.text, self.settings)
+                ),
+            )
             candidates.append(
                 Candidate(
                     chunk=chunk,
@@ -206,16 +233,16 @@ class SearchContextService:
     def _why_selected(self, candidate: Candidate) -> str:
         reasons: list[str] = []
         if candidate.score_lexical > 0:
-            reasons.append("Strong lexical match against the query")
+            reasons.append("Signal: lexical match")
         if candidate.score_dense > 0:
-            reasons.append("Semantic similarity to the query")
+            reasons.append("Signal: semantic match")
         file_path = candidate.source.path_or_url
         if file_path:
-            reasons.append(f"Located in {file_path}")
-        return "; ".join(reasons) or "Selected by retrieval ranking"
+            reasons.append(f"Source path: {file_path}")
+        return "; ".join(reasons) or "Signal: ranked retrieval"
 
     def _freshness_reason(self, source: Source) -> str:
         if source.updated_at_source:
             timestamp = source.updated_at_source.astimezone(UTC).strftime("%Y-%m-%d")
-            return f"Source timestamp available from upstream on {timestamp}"
-        return "Repository source from the latest local ingest snapshot"
+            return f"Freshness: upstream timestamp {timestamp}"
+        return "Freshness: repository content from latest local ingest snapshot"
