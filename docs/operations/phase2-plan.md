@@ -94,7 +94,7 @@ Status: completed on branch `phase2-hardening-and-sync`
 
 ## Workstream 4: Quality Gate Expansion
 
-Status: partially completed on branch `phase2-hardening-and-sync`
+Status: completed on branch `phase2-hardening-and-sync`
 
 ### Scope
 
@@ -120,14 +120,15 @@ Implemented so far:
   - `services/ingest/github_metadata.py`
   - `services/dependencies/vendor_docs.py`
   - `services/mcp/tools.py`
-- Ruff remains intentionally limited to `F,I`
+- CI now runs smoke execution after seeding demo data and starting the API
+- Ruff now uses a two-tier gate:
+  - repository-wide `F,I`
+  - focused `E,F,I,B` for hardened Phase 2 source files
 - shared test database cleanup now uses a PostgreSQL advisory lock to avoid local deadlocks across overlapping `pytest` runs
 
 Remaining:
 
-- decide whether to widen Ruff beyond `F,I` after line-length debt is reduced
 - decide whether to expand MyPy coverage beyond the current high-signal service set
-- optionally add smoke execution to CI
 
 ## Suggested Execution Order
 

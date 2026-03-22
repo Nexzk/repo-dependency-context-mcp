@@ -13,7 +13,7 @@ It focuses on four areas:
 - idempotent ingest and explicit ingest-job state
 - stronger related-change metadata and ranking
 - controlled vendor docs discovery and batch sync
-- higher-signal CI type coverage and safer shared-test-db cleanup
+- higher-signal CI gates, smoke execution, and safer shared-test-db cleanup
 
 ## What Changed
 
@@ -60,6 +60,12 @@ It focuses on four areas:
 ### 4. CI / Test Infrastructure
 
 - focused MyPy coverage expanded to Phase 2 service surfaces
+- focused Ruff coverage expanded to the hardened Phase 2 source set
+- GitHub Actions now:
+  - seeds demo data for smoke
+  - starts the API
+  - waits for `/healthz`
+  - runs `scripts/smoke.ps1`
 - CI docs updated to reflect current gate policy
 - shared PostgreSQL test fixture now uses advisory locking during cleanup to avoid deadlocks across overlapping local test runs
 
@@ -74,8 +80,14 @@ It focuses on four areas:
   - `services/mcp/tools.py`
   - `services/retrieval/embedding_provider.py`
   - `services/retrieval/rerank_provider.py`
+- focused Ruff passes for:
+  - `services/ingest/change_metadata.py`
+  - `services/ingest/github_metadata.py`
+  - `services/dependencies/vendor_docs.py`
+  - `services/mcp/tools.py`
 
 ## Notes
 
-- Ruff intentionally remains limited to `F,I` in CI because broader enablement would currently create low-signal failures from existing line-length debt
+- repository-wide Ruff intentionally remains limited to `F,I`
+- a tighter `E,F,I,B` Ruff gate is now applied only to the hardened Phase 2 source files
 - shared test DB cleanup is now serialized, but the suite is still not designed for meaningful parallel database execution
