@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from repo_dependency_context_mcp.db.models import Chunk, DependencyDoc, Document, QueryLog, Source
 from repo_dependency_context_mcp.services.retrieval.search import SearchContextService
+
+JSONDict = dict[str, Any]
+RelatedChangeItem = dict[str, Any]
 
 
 class MCPToolService:
@@ -22,7 +27,7 @@ class MCPToolService:
         query: str,
         task_type: str | None = None,
         top_k: int = 5,
-    ) -> dict:
+    ) -> JSONDict:
         return self.search_service.search_context(
             tenant_id=tenant_id,
             repo_id=repo_id,
@@ -38,7 +43,7 @@ class MCPToolService:
         path_or_url: str,
         start_line: int,
         end_line: int,
-    ) -> dict:
+    ) -> JSONDict:
         stmt = (
             select(Document, Source)
             .join(Source, Source.id == Document.source_id)
@@ -69,8 +74,8 @@ class MCPToolService:
         repo_id: uuid.UUID,
         path_or_symbol: str,
         since_days: int,
-    ) -> dict:
-        tokens = [part for part in path_or_symbol.replace(":", " ").split() if part]
+    ) -> JSONDict:
+        query = _parse_related_change_query(path_or_symbol)
         cutoff = datetime.now(UTC) - timedelta(days=since_days)
         stmt = (
             select(Chunk, Document, Source)
@@ -82,24 +87,32 @@ class MCPToolService:
         )
         rows = self.session.execute(stmt).all()
 
-        result = {
+        result: dict[str, list[RelatedChangeItem]] = {
+            "pull_requests": [],
+            "commits": [],
+            "issues": [],
+        }
+        ranked_items: dict[str, list[tuple[tuple[int, float, str], RelatedChangeItem]]] = {
             "pull_requests": [],
             "commits": [],
             "issues": [],
         }
         for chunk, document, source in rows:
-            if not _matches_related_change(chunk=chunk, document=document, tokens=tokens):
+            match = _score_related_change(chunk=chunk, document=document, query=query)
+            if match is None:
                 continue
             merged_at = chunk.metadata_json.get("merged_at")
+            merged_at_ts = 0.0
             if merged_at:
                 try:
                     merged_at_dt = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
                     if merged_at_dt < cutoff:
                         continue
+                    merged_at_ts = merged_at_dt.timestamp()
                 except ValueError:
                     pass
 
-            item = {
+            item: RelatedChangeItem = {
                 "title": document.title,
                 "external_ref": source.external_ref,
                 "summary": chunk.text[:500],
@@ -107,13 +120,22 @@ class MCPToolService:
                 "labels": chunk.metadata_json.get("labels", []),
                 "merged_at": chunk.metadata_json.get("merged_at"),
                 "path_or_url": source.path_or_url,
+                "related_file_paths": _related_file_paths(chunk.metadata_json),
+                "related_symbols": _related_symbols(chunk.metadata_json),
+                "source_pr_ref": chunk.metadata_json.get("source_pr_ref"),
+                "source_commit_sha": chunk.metadata_json.get("source_commit_sha"),
+                "source_commit_ref": chunk.metadata_json.get("source_commit_ref"),
+                "source_issue_ref": chunk.metadata_json.get("source_issue_ref"),
             }
             if source.source_type == "pr":
-                result["pull_requests"].append(item)
+                ranked_items["pull_requests"].append(((match.rank, merged_at_ts, source.external_ref or ""), item))
             elif source.source_type == "commit":
-                result["commits"].append(item)
+                ranked_items["commits"].append(((match.rank, merged_at_ts, source.external_ref or ""), item))
             elif source.source_type == "issue":
-                result["issues"].append(item)
+                ranked_items["issues"].append(((match.rank, merged_at_ts, source.external_ref or ""), item))
+        for key, values in ranked_items.items():
+            values.sort(key=lambda pair: (-pair[0][0], -pair[0][1], pair[0][2]))
+            result[key] = [item for _, item in values]
         return result
 
     def get_dependency_notes(
@@ -123,7 +145,7 @@ class MCPToolService:
         version_range: str | None = None,
         topic: str | None = None,
         top_k: int = 5,
-    ) -> dict:
+    ) -> JSONDict:
         stmt = select(DependencyDoc).where(DependencyDoc.package_name == package_name)
         if version_range:
             stmt = stmt.where(or_(DependencyDoc.version_range == version_range, DependencyDoc.version_range.is_(None)))
@@ -176,7 +198,48 @@ class MCPToolService:
         return "; ".join(reasons)
 
 
-def _matches_related_change(chunk: Chunk, document: Document, tokens: list[str]) -> bool:
+class _RelatedChangeQuery:
+    def __init__(self, raw: str, path: str | None, symbol: str | None, lexical_terms: list[str]) -> None:
+        self.raw = raw
+        self.path = path
+        self.symbol = symbol
+        self.lexical_terms = lexical_terms
+
+
+class _RelatedChangeMatch:
+    def __init__(self, rank: int) -> None:
+        self.rank = rank
+
+
+def _parse_related_change_query(path_or_symbol: str) -> _RelatedChangeQuery:
+    path = None
+    symbol = None
+    if ":" in path_or_symbol:
+        left, right = path_or_symbol.split(":", 1)
+        path = left.strip() or None
+        symbol = right.strip() or None
+    elif "/" in path_or_symbol or "." in path_or_symbol:
+        path = path_or_symbol.strip() or None
+    else:
+        symbol = path_or_symbol.strip() or None
+
+    lexical_terms = sorted(
+        {
+            term.lower()
+            for term in re.split(r"[^A-Za-z0-9]+", path_or_symbol)
+            if term and len(term) >= 2
+        }
+    )
+    return _RelatedChangeQuery(raw=path_or_symbol, path=path, symbol=symbol, lexical_terms=lexical_terms)
+
+
+def _score_related_change(chunk: Chunk, document: Document, query: _RelatedChangeQuery) -> _RelatedChangeMatch | None:
+    related_file_paths = [value.lower() for value in _related_file_paths(chunk.metadata_json)]
+    related_symbols = [value.lower() for value in _related_symbols(chunk.metadata_json)]
+    related_paths = [str(value).lower() for value in chunk.metadata_json.get("related_paths", [])]
+    path_match = bool(query.path and query.path.lower() in (related_file_paths or related_paths))
+    symbol_match = bool(query.symbol and query.symbol.lower() in (related_symbols or related_paths))
+
     searchable = " ".join(
         [
             document.title or "",
@@ -184,4 +247,28 @@ def _matches_related_change(chunk: Chunk, document: Document, tokens: list[str])
             " ".join(chunk.metadata_json.get("related_paths", [])),
         ]
     ).lower()
-    return any(token.lower() in searchable for token in tokens)
+    lexical_match = any(term in searchable for term in query.lexical_terms)
+
+    if path_match and not symbol_match:
+        return _RelatedChangeMatch(rank=5)
+    if symbol_match and not path_match:
+        return _RelatedChangeMatch(rank=4)
+    if path_match and symbol_match:
+        return _RelatedChangeMatch(rank=3)
+    if lexical_match:
+        return _RelatedChangeMatch(rank=2)
+    return None
+
+
+def _related_file_paths(metadata: JSONDict) -> list[str]:
+    explicit = [str(value) for value in metadata.get("related_file_paths", [])]
+    if explicit:
+        return explicit
+    return [str(value) for value in metadata.get("related_paths", []) if "/" in str(value) or "." in str(value)]
+
+
+def _related_symbols(metadata: JSONDict) -> list[str]:
+    explicit = [str(value) for value in metadata.get("related_symbols", [])]
+    if explicit:
+        return explicit
+    return [str(value) for value in metadata.get("related_paths", []) if "/" not in str(value) and "." not in str(value)]
