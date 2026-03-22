@@ -5,6 +5,7 @@ from pathlib import Path
 
 from repo_dependency_context_mcp.api.deps import get_db_session
 from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
+    VendorDocDiscoveryRequest,
     VendorDocFetchRequest,
     VendorDocIngestService,
 )
@@ -42,6 +43,22 @@ def fetch_vendor_docs_task(
     with get_db_session() as session:
         typed_requests = [VendorDocFetchRequest(**item) for item in requests]
         return VendorDocIngestService(session, official_domains=official_domains).fetch_and_ingest(
+            package_name=package_name,
+            ecosystem=ecosystem,
+            requests=typed_requests,
+        )
+
+
+@celery_app.task(name="rdcmcp.discover_vendor_docs")
+def discover_vendor_docs_task(
+    package_name: str,
+    ecosystem: str,
+    official_domains: dict[str, list[str]],
+    requests: list[dict],
+) -> int:
+    with get_db_session() as session:
+        typed_requests = [VendorDocDiscoveryRequest(**item) for item in requests]
+        return VendorDocIngestService(session, official_domains=official_domains).discover_and_ingest(
             package_name=package_name,
             ecosystem=ecosystem,
             requests=typed_requests,

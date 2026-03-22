@@ -20,3 +20,15 @@ MVP scaffold for a context compiler that returns minimal evidence packs for codi
 5. Run the smoke script with `powershell -ExecutionPolicy Bypass -File .\scripts\smoke.ps1`
 
 See `docs/operations/local-runbook.md` for a fuller local runbook.
+
+## Useful Commands
+
+```powershell
+rdcmcp mcp stdio
+rdcmcp github ingest <tenant_id> <repo_id> <owner> <repo_name> [base_url]
+rdcmcp vendor fetch <package_name> <ecosystem> <url> <version_range>
+rdcmcp vendor discover <package_name> <ecosystem> <index_url> <version_range>
+rdcmcp eval run <dataset.yaml>
+```
+
+`vendor discover` performs controlled multi-page vendor docs discovery using the configured official-domain whitelist, inferred doc types, URL-prefix filtering, and bounded page counts.

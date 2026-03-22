@@ -66,6 +66,8 @@ Turn the MVP into a more durable internal system by improving sync correctness, 
 
 ## Workstream 3: Vendor Docs Discovery and Batch Sync
 
+Status: completed on branch `phase2-hardening-and-sync`
+
 ### Scope
 
 - move from single-page fetch to controlled multi-page discovery

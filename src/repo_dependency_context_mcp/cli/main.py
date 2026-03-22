@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from repo_dependency_context_mcp.api.deps import get_db_session
 from repo_dependency_context_mcp.config import Settings
 from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
+    VendorDocDiscoveryRequest,
     VendorDocFetchRequest,
     VendorDocIngestService,
 )
@@ -45,6 +46,30 @@ def main() -> None:
                 package_name=package_name,
                 ecosystem=ecosystem,
                 requests=[VendorDocFetchRequest(doc_type="release_notes", url=url, version_range=version_range)],
+            )
+        print(result)
+        return
+    if len(sys.argv) >= 7 and sys.argv[1:3] == ["vendor", "discover"]:
+        package_name, ecosystem, index_url, version_range = sys.argv[3:7]
+        hostname = urlparse(index_url).hostname or ""
+        base_prefix = index_url.rstrip("/") + "/"
+        with get_db_session() as session:
+            result = VendorDocIngestService(
+                session,
+                official_domains={package_name: [hostname]},
+            ).discover_and_ingest(
+                package_name=package_name,
+                ecosystem=ecosystem,
+                requests=[
+                    VendorDocDiscoveryRequest(
+                        index_url=index_url,
+                        doc_type="release_notes",
+                        version_range=version_range,
+                        include_url_prefixes=[base_prefix],
+                        include_doc_types=["release_notes", "migration_guide"],
+                        max_pages=10,
+                    )
+                ],
             )
         print(result)
         return
