@@ -13,6 +13,8 @@ from repo_dependency_context_mcp.db.models import (
     IngestJob,
     Repo,
     Source,
+    SyncCursor,
+    SyncRun,
     Tenant,
 )
 from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
@@ -46,7 +48,11 @@ class _IdempotentGitHubHandler(BaseHTTPRequestHandler):
                     },
                 }
             ],
-            "/release-notes": "<html><head><title>FastAPI Release Notes</title></head><body><main><h1>FastAPI Release Notes</h1><p>Official migration details.</p></main></body></html>",
+            "/release-notes": """
+            <html><head><title>FastAPI Release Notes</title></head>
+            <body><main><h1>FastAPI Release Notes</h1>
+            <p>Official migration details.</p></main></body></html>
+            """.strip(),
         }
         route = routes.get(self.path)
         if isinstance(route, str):
@@ -105,9 +111,24 @@ def test_sync_flows_are_idempotent(db_session, tmp_path: Path) -> None:
 
     assert first.source_count == 1
     assert second.source_count == 0
-    assert db_session.scalar(select(func.count()).select_from(Source).where(Source.repo_id == repo.id)) == 1
-    assert db_session.scalar(select(func.count()).select_from(Chunk).where(Chunk.repo_id == repo.id)) == 1
+    assert db_session.scalar(
+        select(func.count()).select_from(Source).where(Source.repo_id == repo.id)
+    ) == 1
+    assert db_session.scalar(
+        select(func.count()).select_from(Chunk).where(Chunk.repo_id == repo.id)
+    ) == 1
     assert db_session.scalar(select(func.count()).select_from(IngestJob)) == 2
+    assert db_session.scalar(
+        select(func.count()).select_from(SyncRun).where(SyncRun.source_kind == "local_repo")
+    ) == 2
+    local_cursor = db_session.scalar(
+        select(SyncCursor).where(
+            SyncCursor.repo_id == repo.id,
+            SyncCursor.source_kind == "local_repo",
+        )
+    )
+    assert local_cursor is not None
+    assert local_cursor.cursor_value is not None
 
     server = HTTPServer(("127.0.0.1", 0), _IdempotentGitHubHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -169,3 +190,88 @@ def test_sync_flows_are_idempotent(db_session, tmp_path: Path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_local_repo_sync_failure_does_not_advance_cursor(
+    db_session,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "sample_repo_failure"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "def require_admin(user):\n    return user.get('is_admin', False)\n",
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Local Sync Failure", slug="tenant-local-sync-failure")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-failure",
+        provider="local",
+        external_id="sample-repo-failure",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    service = LocalRepoIngestService(db_session)
+    service.ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+    previous_cursor = db_session.scalar(
+        select(SyncCursor.cursor_value).where(
+            SyncCursor.repo_id == repo.id,
+            SyncCursor.source_kind == "local_repo",
+        )
+    )
+    (repo_root / "src" / "auth.py").write_text(
+        "def require_admin(user):\n    raise PermissionError('admin only')\n",
+        encoding="utf-8",
+    )
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("chunk failed")
+
+    monkeypatch.setattr(
+        "repo_dependency_context_mcp.services.ingest.local_repo._chunk_file",
+        _boom,
+    )
+
+    try:
+        service.ingest_repo(
+            tenant_id=tenant.id,
+            repo_id=repo.id,
+            repo_path=repo_root,
+            acl_scope={"visibility": "private"},
+        )
+    except RuntimeError:
+        pass
+
+    current_cursor = db_session.scalar(
+        select(SyncCursor.cursor_value).where(
+            SyncCursor.repo_id == repo.id,
+            SyncCursor.source_kind == "local_repo",
+        )
+    )
+    failed_run = db_session.scalars(
+        select(SyncRun)
+        .where(
+            SyncRun.repo_id == repo.id,
+            SyncRun.source_kind == "local_repo",
+            SyncRun.status == "failed",
+        )
+        .order_by(SyncRun.created_at.desc())
+    ).first()
+
+    assert current_cursor == previous_cursor
+    assert failed_run is not None
+    assert failed_run.status == "failed"

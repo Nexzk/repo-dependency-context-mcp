@@ -2,7 +2,15 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from repo_dependency_context_mcp.db.models import Chunk, Document, Repo, Source, Tenant
+from repo_dependency_context_mcp.db.models import (
+    Chunk,
+    Document,
+    Repo,
+    Source,
+    SyncCursor,
+    SyncRun,
+    Tenant,
+)
 from repo_dependency_context_mcp.services.ingest.local_repo import LocalRepoIngestService
 
 
@@ -67,7 +75,9 @@ def test_local_repo_ingest_persists_code_and_markdown_chunks(db_session, tmp_pat
     assert result.document_count == 2
     assert result.chunk_count >= 3
 
-    sources = db_session.scalars(select(Source).order_by(Source.source_type, Source.path_or_url)).all()
+    sources = db_session.scalars(
+        select(Source).order_by(Source.source_type, Source.path_or_url)
+    ).all()
     assert [source.source_type for source in sources] == ["repo_code", "repo_doc"]
 
     documents = db_session.scalars(select(Document).order_by(Document.title)).all()
@@ -81,3 +91,24 @@ def test_local_repo_ingest_persists_code_and_markdown_chunks(db_session, tmp_pat
     assert any("Section: Authentication > Admin Routes" in chunk.context_prefix for chunk in chunks)
     assert all(chunk.authority == "repo" for chunk in chunks)
     assert all(chunk.acl_scope == {"visibility": "private"} for chunk in chunks)
+
+    cursor = db_session.scalar(
+        select(SyncCursor).where(
+            SyncCursor.repo_id == repo.id,
+            SyncCursor.source_kind == "local_repo",
+        )
+    )
+    run = db_session.scalar(
+        select(SyncRun).where(
+            SyncRun.repo_id == repo.id,
+            SyncRun.source_kind == "local_repo",
+        )
+    )
+    assert cursor is not None
+    assert cursor.cursor_kind == "repo_snapshot"
+    assert cursor.cursor_value is not None
+    assert cursor.last_success_at is not None
+    assert run is not None
+    assert run.status == "completed"
+    assert run.items_seen == 2
+    assert run.items_written == 2
