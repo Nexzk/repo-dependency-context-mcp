@@ -79,6 +79,7 @@ class EvalRunnerService:
                     "must_rank_before": case_payload.get("must_rank_before", []),
                 },
                 metadata_json={
+                    "tool": case_payload.get("tool", "search_context"),
                     "requires_clarification": case_payload.get(
                         "requires_clarification",
                         False,
@@ -88,12 +89,9 @@ class EvalRunnerService:
             self.session.add(eval_case)
             self.session.flush()
 
-            response = self.tool_service.search_context(
-                tenant_id=eval_case.tenant_id,
-                repo_id=eval_case.repo_id,
-                query=eval_case.query_text,
-                task_type=eval_case.task_type,
-                top_k=5,
+            response = self._execute_case(
+                eval_case=eval_case,
+                case_payload=case_payload,
             )
 
             metrics = self._score_case(
@@ -164,6 +162,27 @@ class EvalRunnerService:
         eval_run.summary_json = summary
         self.session.commit()
         return summary
+
+    def _execute_case(self, eval_case: EvalCase, case_payload: dict) -> dict:
+        tool_name = case_payload.get("tool", "search_context")
+        if tool_name == "search_context":
+            return self.tool_service.search_context(
+                tenant_id=eval_case.tenant_id,
+                repo_id=eval_case.repo_id,
+                query=eval_case.query_text,
+                task_type=eval_case.task_type,
+                top_k=5,
+            )
+        if tool_name == "get_dependency_notes":
+            return self.tool_service.get_dependency_notes(
+                tenant_id=eval_case.tenant_id,
+                repo_id=eval_case.repo_id,
+                package_name=case_payload["package_name"],
+                version_range=case_payload.get("version_range"),
+                topic=case_payload.get("topic"),
+                top_k=5,
+            )
+        raise ValueError(f"unsupported eval tool: {tool_name}")
 
     def _score_case(
         self,

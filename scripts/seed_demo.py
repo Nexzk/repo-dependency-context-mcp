@@ -7,6 +7,7 @@ from pathlib import Path
 
 from repo_dependency_context_mcp.api.deps import get_db_session
 from repo_dependency_context_mcp.db.models import Repo, Tenant
+from repo_dependency_context_mcp.services.dependencies.parser import DependencyParserService
 from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
     VendorDocCandidate,
     VendorDocIngestService,
@@ -57,6 +58,11 @@ def main() -> None:
                 repo_id=repo.id,
                 repo_path=temp_repo,
                 acl_scope={"visibility": "private"},
+            )
+            DependencyParserService(session).parse_and_persist(
+                tenant_id=tenant.id,
+                repo_id=repo.id,
+                repo_path=temp_repo,
             )
 
         ChangeMetadataIngestService(session).ingest_json_fixture(

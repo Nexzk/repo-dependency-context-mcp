@@ -3,7 +3,13 @@ from pathlib import Path
 from sqlalchemy import select
 
 from repo_dependency_context_mcp.db.models import EvalCase, EvalCaseResult, EvalRun, Repo, Tenant
+from repo_dependency_context_mcp.services.dependencies.parser import DependencyParserService
+from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
+    VendorDocCandidate,
+    VendorDocIngestService,
+)
 from repo_dependency_context_mcp.services.eval.runner import EvalRunnerService
+from repo_dependency_context_mcp.services.ingest.change_metadata import ChangeMetadataIngestService
 from repo_dependency_context_mcp.services.ingest.local_repo import LocalRepoIngestService
 
 
@@ -294,3 +300,198 @@ cases:
         < 1.0
     )
     assert summary["evidence_contract_score"] == 0.9
+
+
+def test_eval_runner_covers_repo_dependency_and_related_change_cases(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_eval_coverage"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "docs").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_root / "docs" / "auth.md").write_text(
+        "\n".join(
+            [
+                "# Authentication",
+                "",
+                "The require_admin helper protects admin-only routes.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_root / "requirements.txt").write_text(
+        "fastapi==0.115.0\n",
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Eval Coverage", slug="tenant-eval-coverage")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-eval-coverage",
+        provider="local",
+        external_id="sample-repo-eval-coverage",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+    DependencyParserService(db_session).parse_and_persist(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+    )
+    VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["fastapi.tiangolo.com"]},
+    ).ingest_candidates(
+        package_name="fastapi",
+        ecosystem="python",
+        candidates=[
+            VendorDocCandidate(
+                doc_type="migration_guide",
+                authority="official",
+                url="https://fastapi.tiangolo.com/release-notes/",
+                title="FastAPI Release Notes",
+                section_title="0.115",
+                raw_text="FastAPI migration guide for 0.115 covers migration steps.",
+                version_range="0.115.x",
+            )
+        ],
+    )
+
+    changes_fixture = tmp_path / "changes_eval_coverage.json"
+    changes_fixture.write_text(
+        """
+[
+  {
+    "source_type": "pr",
+    "external_ref": "pr-101",
+    "title": "Harden admin middleware",
+    "body": "Updates require_admin and related auth checks in src/auth.py.",
+    "author": "alice",
+    "labels": ["auth", "security"],
+    "merged_at": "2026-03-20T00:00:00Z",
+    "related_paths": ["src/auth.py", "require_admin"]
+  },
+  {
+    "source_type": "issue",
+    "external_ref": "issue-77",
+    "title": "Admin route fails for privileged users",
+    "body": "Possible regression around require_admin.",
+    "author": "carol",
+    "labels": ["bug"],
+    "related_paths": ["require_admin"]
+  }
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    ChangeMetadataIngestService(db_session).ingest_json_fixture(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        fixture_path=changes_fixture,
+        acl_scope={"visibility": "private"},
+    )
+
+    dataset_path = tmp_path / "eval_coverage.yaml"
+    dataset_path.write_text(
+        f"""
+name: eval-coverage
+description: covers repo, dependency docs, and related changes
+cases:
+  - id: locate_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+    expected_authorities:
+      - repo
+    expected_freshness_contains:
+      - repository content
+  - id: dependency_fastapi_migration
+    tool: get_dependency_notes
+    query: what changed in fastapi 0.115 migration
+    task_type: migration
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    package_name: fastapi
+    version_range: 0.115.x
+    topic: migration
+    must_hit_sources:
+      - vendor_doc:https://fastapi.tiangolo.com/release-notes/
+      - dependency_manifest:requirements.txt
+    expected_authorities:
+      - official
+    expected_freshness_contains:
+      - whitelisted domain
+    expected_why_selected_contains:
+      - matches package fastapi
+    must_rank_before:
+      - higher: vendor_doc:https://fastapi.tiangolo.com/release-notes/
+        lower: dependency_manifest:requirements.txt
+  - id: related_auth_changes
+    query: harden admin middleware require_admin src/auth.py
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - pr:pr:pr-101
+    expected_authorities:
+      - repo
+    expected_why_selected_contains:
+      - signal
+""".strip(),
+        encoding="utf-8",
+    )
+
+    summary = EvalRunnerService(db_session).run_from_yaml(dataset_path)
+    eval_cases = {
+        case.id: case.name for case in db_session.scalars(select(EvalCase)).all()
+    }
+    case_results = {
+        eval_cases[result.eval_case_id]: result
+        for result in db_session.scalars(select(EvalCaseResult)).all()
+    }
+
+    assert summary["case_count"] == 3
+    assert summary["overall_score"] == 1.0
+    assert (
+        case_results["dependency_fastapi_migration"].result_payload["scores"][
+            "rank_order_ok"
+        ]
+        == 1.0
+    )
+    assert (
+        case_results["dependency_fastapi_migration"].result_payload["scores"][
+            "authority_match"
+        ]
+        == 1.0
+    )
+    assert (
+        case_results["related_auth_changes"].result_payload["scores"]["retrieval_score"]
+        == 1.0
+    )
