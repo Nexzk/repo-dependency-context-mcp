@@ -55,6 +55,15 @@ jobs:
       - name: Ruff
         run: ruff check src tests scripts --select F,I
 
+      - name: Ruff Focused Phase 2 Sources
+        run: >-
+          ruff check
+          src/repo_dependency_context_mcp/services/ingest/change_metadata.py
+          src/repo_dependency_context_mcp/services/ingest/github_metadata.py
+          src/repo_dependency_context_mcp/services/dependencies/vendor_docs.py
+          src/repo_dependency_context_mcp/services/mcp/tools.py
+          --select E,F,I,B
+
       - name: MyPy
         run: >-
           python -m mypy

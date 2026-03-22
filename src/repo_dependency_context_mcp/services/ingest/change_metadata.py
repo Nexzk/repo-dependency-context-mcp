@@ -38,7 +38,11 @@ class ChangeMetadataIngestService:
                 "labels": item.get("labels", []),
                 "merged_at": item.get("merged_at"),
                 **related_metadata,
-                **_normalize_source_refs(source_type=source_type, external_ref=external_ref, item=item),
+                **_normalize_source_refs(
+                    source_type=source_type,
+                    external_ref=external_ref,
+                    item=item,
+                ),
             }
             checksum = _checksum(raw_text)
             source = self.session.execute(
@@ -139,7 +143,12 @@ def _checksum(raw_text: str) -> str:
     return hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
 
 
-def _build_context_prefix(source_type: str, title: str, author: str | None, merged_at: str | None) -> str:
+def _build_context_prefix(
+    source_type: str,
+    title: str,
+    author: str | None,
+    merged_at: str | None,
+) -> str:
     lines = [
         f"SourceType: {source_type}",
         f"Title: {title}",
@@ -166,13 +175,19 @@ def _normalize_related_metadata(item: dict[str, Any]) -> dict[str, Any]:
     normalized_file_paths = sorted(set(related_file_paths))
     normalized_symbols = sorted(set(related_symbols))
     return {
-        "related_paths": sorted(set(related_paths or [*normalized_file_paths, *normalized_symbols])),
+        "related_paths": sorted(
+            set(related_paths or [*normalized_file_paths, *normalized_symbols])
+        ),
         "related_file_paths": normalized_file_paths,
         "related_symbols": normalized_symbols,
     }
 
 
-def _normalize_source_refs(source_type: str, external_ref: str, item: dict[str, Any]) -> dict[str, Any]:
+def _normalize_source_refs(
+    source_type: str,
+    external_ref: str,
+    item: dict[str, Any],
+) -> dict[str, Any]:
     refs = {
         "source_pr_ref": item.get("source_pr_ref"),
         "source_commit_sha": item.get("source_commit_sha"),

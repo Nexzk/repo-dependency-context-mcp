@@ -128,11 +128,17 @@ class MCPToolService:
                 "source_issue_ref": chunk.metadata_json.get("source_issue_ref"),
             }
             if source.source_type == "pr":
-                ranked_items["pull_requests"].append(((match.rank, merged_at_ts, source.external_ref or ""), item))
+                ranked_items["pull_requests"].append(
+                    ((match.rank, merged_at_ts, source.external_ref or ""), item)
+                )
             elif source.source_type == "commit":
-                ranked_items["commits"].append(((match.rank, merged_at_ts, source.external_ref or ""), item))
+                ranked_items["commits"].append(
+                    ((match.rank, merged_at_ts, source.external_ref or ""), item)
+                )
             elif source.source_type == "issue":
-                ranked_items["issues"].append(((match.rank, merged_at_ts, source.external_ref or ""), item))
+                ranked_items["issues"].append(
+                    ((match.rank, merged_at_ts, source.external_ref or ""), item)
+                )
         for key, values in ranked_items.items():
             values.sort(key=lambda pair: (-pair[0][0], -pair[0][1], pair[0][2]))
             result[key] = [item for _, item in values]
@@ -148,7 +154,12 @@ class MCPToolService:
     ) -> JSONDict:
         stmt = select(DependencyDoc).where(DependencyDoc.package_name == package_name)
         if version_range:
-            stmt = stmt.where(or_(DependencyDoc.version_range == version_range, DependencyDoc.version_range.is_(None)))
+            stmt = stmt.where(
+                or_(
+                    DependencyDoc.version_range == version_range,
+                    DependencyDoc.version_range.is_(None),
+                )
+            )
         docs = self.session.scalars(stmt.limit(top_k)).all()
 
         evidence = []
@@ -177,7 +188,11 @@ class MCPToolService:
                 query_text=f"dependency:{package_name}:{topic or ''}",
                 task_type="migration",
                 normalized_query=f"{package_name} {topic or ''}".strip(),
-                filters={"package_name": package_name, "version_range": version_range, "top_k": top_k},
+                filters={
+                    "package_name": package_name,
+                    "version_range": version_range,
+                    "top_k": top_k,
+                },
                 result_count=len(evidence),
                 latency_ms=0,
             )
@@ -199,7 +214,13 @@ class MCPToolService:
 
 
 class _RelatedChangeQuery:
-    def __init__(self, raw: str, path: str | None, symbol: str | None, lexical_terms: list[str]) -> None:
+    def __init__(
+        self,
+        raw: str,
+        path: str | None,
+        symbol: str | None,
+        lexical_terms: list[str],
+    ) -> None:
         self.raw = raw
         self.path = path
         self.symbol = symbol
@@ -230,10 +251,19 @@ def _parse_related_change_query(path_or_symbol: str) -> _RelatedChangeQuery:
             if term and len(term) >= 2
         }
     )
-    return _RelatedChangeQuery(raw=path_or_symbol, path=path, symbol=symbol, lexical_terms=lexical_terms)
+    return _RelatedChangeQuery(
+        raw=path_or_symbol,
+        path=path,
+        symbol=symbol,
+        lexical_terms=lexical_terms,
+    )
 
 
-def _score_related_change(chunk: Chunk, document: Document, query: _RelatedChangeQuery) -> _RelatedChangeMatch | None:
+def _score_related_change(
+    chunk: Chunk,
+    document: Document,
+    query: _RelatedChangeQuery,
+) -> _RelatedChangeMatch | None:
     related_file_paths = [value.lower() for value in _related_file_paths(chunk.metadata_json)]
     related_symbols = [value.lower() for value in _related_symbols(chunk.metadata_json)]
     related_paths = [str(value).lower() for value in chunk.metadata_json.get("related_paths", [])]
@@ -264,11 +294,19 @@ def _related_file_paths(metadata: JSONDict) -> list[str]:
     explicit = [str(value) for value in metadata.get("related_file_paths", [])]
     if explicit:
         return explicit
-    return [str(value) for value in metadata.get("related_paths", []) if "/" in str(value) or "." in str(value)]
+    return [
+        str(value)
+        for value in metadata.get("related_paths", [])
+        if "/" in str(value) or "." in str(value)
+    ]
 
 
 def _related_symbols(metadata: JSONDict) -> list[str]:
     explicit = [str(value) for value in metadata.get("related_symbols", [])]
     if explicit:
         return explicit
-    return [str(value) for value in metadata.get("related_paths", []) if "/" not in str(value) and "." not in str(value)]
+    return [
+        str(value)
+        for value in metadata.get("related_paths", [])
+        if "/" not in str(value) and "." not in str(value)
+    ]

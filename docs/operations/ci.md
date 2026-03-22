@@ -36,6 +36,11 @@ The highest-value signal for this MVP is still:
 ## Current Quality Gates
 
 - `ruff check src tests scripts --select F,I`
+- focused Ruff on:
+  - `src/repo_dependency_context_mcp/services/ingest/change_metadata.py`
+  - `src/repo_dependency_context_mcp/services/ingest/github_metadata.py`
+  - `src/repo_dependency_context_mcp/services/dependencies/vendor_docs.py`
+  - `src/repo_dependency_context_mcp/services/mcp/tools.py`
 - focused MyPy on:
   - `src/repo_dependency_context_mcp/config.py`
   - `src/repo_dependency_context_mcp/services/ingest/change_metadata.py`
@@ -47,9 +52,10 @@ The highest-value signal for this MVP is still:
 
 The MyPy scope is intentionally narrow because the repository still has broader MVP-grade typing debt. The current target set now covers:
 
+- Phase 2 source files with tighter Ruff checks
 - provider configuration and abstraction surfaces
 - hardened ingest metadata paths
 - vendor docs discovery and batch sync logic
 - related-change ranking logic
 
-Ruff intentionally remains on `F,I` only. Expanding it to include `E` right now would turn CI noisy because the repository still has broad line-length debt that does not materially affect runtime correctness.
+Ruff still remains broad-only on `F,I`. The tighter `E,F,I,B` gate is intentionally limited to the Phase 2 source files above, where the debt has been reduced enough to keep CI high-signal.

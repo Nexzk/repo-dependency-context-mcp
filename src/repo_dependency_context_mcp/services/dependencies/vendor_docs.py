@@ -44,7 +44,12 @@ class VendorDocIngestService:
         self.session = session
         self.official_domains = official_domains
 
-    def fetch_and_ingest(self, package_name: str, ecosystem: str, requests: list[VendorDocFetchRequest]) -> int:
+    def fetch_and_ingest(
+        self,
+        package_name: str,
+        ecosystem: str,
+        requests: list[VendorDocFetchRequest],
+    ) -> int:
         candidates: list[VendorDocCandidate] = []
         with httpx.Client(follow_redirects=True, timeout=10.0) as client:
             for request in requests:
@@ -112,7 +117,10 @@ class VendorDocIngestService:
                         default_doc_type=request.doc_type,
                         include_doc_types=request.include_doc_types or [],
                     )
-                    if request.include_doc_types and resolved_doc_type not in request.include_doc_types:
+                    if (
+                        request.include_doc_types
+                        and resolved_doc_type not in request.include_doc_types
+                    ):
                         continue
                     candidates.append(
                         VendorDocCandidate(
@@ -198,7 +206,10 @@ class VendorDocIngestService:
         if not allowed_domains:
             return False
         hostname = (urlparse(url).hostname or "").lower()
-        return any(hostname == domain or hostname.endswith(f".{domain}") for domain in allowed_domains)
+        return any(
+            hostname == domain or hostname.endswith(f".{domain}")
+            for domain in allowed_domains
+        )
 
     def _discover_page_urls(
         self,
@@ -213,7 +224,9 @@ class VendorDocIngestService:
             resolved = urljoin(index_url, link)
             if not self._is_allowed_domain(resolved, allowed_domains):
                 continue
-            if include_url_prefixes and not any(resolved.startswith(prefix) for prefix in include_url_prefixes):
+            if include_url_prefixes and not any(
+                resolved.startswith(prefix) for prefix in include_url_prefixes
+            ):
                 continue
             if resolved not in discovered:
                 discovered.append(resolved)
@@ -255,7 +268,12 @@ class _SimpleHtmlDocParser(HTMLParser):
         return "\n".join(self._parts)
 
 
-def _infer_doc_type(url: str, title: str, default_doc_type: str, include_doc_types: list[str]) -> str:
+def _infer_doc_type(
+    url: str,
+    title: str,
+    default_doc_type: str,
+    include_doc_types: list[str],
+) -> str:
     haystack = f"{url} {title}".lower()
     candidates = include_doc_types or [default_doc_type]
     for candidate in candidates:

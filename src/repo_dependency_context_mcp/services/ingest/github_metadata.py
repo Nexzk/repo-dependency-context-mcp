@@ -10,7 +10,12 @@ from repo_dependency_context_mcp.services.ingest.change_metadata import ChangeMe
 
 
 class GitHubMetadataIngestService:
-    def __init__(self, session: Session, base_url: str = "https://api.github.com", token: str | None = None) -> None:
+    def __init__(
+        self,
+        session: Session,
+        base_url: str = "https://api.github.com",
+        token: str | None = None,
+    ) -> None:
         self.session = session
         self.base_url = base_url.rstrip("/")
         self.token = token
