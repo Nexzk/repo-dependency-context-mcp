@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: rdcmcp
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rdcmcp"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      RDCMCP_APP_NAME: repo-dependency-context-mcp
+      RDCMCP_ENV: ci
+      RDCMCP_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/rdcmcp
+      RDCMCP_REDIS_URL: redis://127.0.0.1:6379/0
+      RDCMCP_EMBEDDING_PROVIDER: local
+      RDCMCP_RERANK_PROVIDER: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Ruff
+        run: ruff check src tests scripts --select F,I
+
+      - name: MyPy
+        run: >-
+          python -m mypy
+          --ignore-missing-imports
+          --follow-imports=silent
+          src/repo_dependency_context_mcp/config.py
+          src/repo_dependency_context_mcp/services/retrieval/embedding_provider.py
+          src/repo_dependency_context_mcp/services/retrieval/rerank_provider.py
+
+      - name: Apply migrations
+        run: python -m alembic upgrade head
+
+      - name: Run tests
+        run: pytest

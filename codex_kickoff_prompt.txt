@@ -1,0 +1,61 @@
+你现在要开发一个名为 Repo + Dependency Context MCP 的 MVP。
+
+产品目标：
+构建一个 context compiler，在 coding agent 需要上下文时，返回“当前任务最小充分证据包”，而不是返回自然语言自由回答。
+
+产品范围：
+- repo code
+- repo docs
+- PR / issue / commit metadata
+- dependency official docs / changelog / migration guide
+- hybrid retrieval
+- rerank
+- ACL
+- MCP server
+- offline eval
+
+明确不做：
+- 自动改代码
+- 通用聊天 UI
+- Slack / Notion / Confluence 接入
+- 自研向量数据库
+- 复杂计费
+
+技术栈：
+- Python 3.11
+- FastAPI
+- PostgreSQL + pgvector
+- Redis
+- Celery
+- SQLAlchemy 2.x
+- Alembic
+- tree-sitter
+- pytest
+
+你的执行顺序必须是：
+1. 初始化项目脚手架
+2. 实现数据库模型与 Alembic 迁移
+3. 实现本地 repo ingest
+4. 实现代码 / Markdown chunking
+5. 实现 FTS + embedding + hybrid retrieval
+6. 实现 evidence packer
+7. 实现 dependency parser 与 vendor docs ingest
+8. 实现 4 个 MCP tools
+9. 实现 eval runner
+10. 实现最小 playground 与 observability
+
+硬性要求：
+- 所有查询结果必须返回 evidence、why_selected、authority、freshness_reason
+- 所有查询必须落库记录 query_logs 与 query_results
+- 严格 tenant / repo / ACL 隔离
+- dependency docs 只能来自白名单官方域名
+- 优先保证 ingest -> retrieve -> pack -> eval 闭环
+- 不要擅自添加额外基础设施
+
+请先完成下面 4 件事，再继续写代码：
+A. 输出仓库目录结构
+B. 输出依赖清单
+C. 输出第一阶段要创建的文件列表
+D. 生成第一阶段代码骨架
+
+如遇到设计未明确之处，优先按“简单、可运行、可测试、可替换”的原则实现。

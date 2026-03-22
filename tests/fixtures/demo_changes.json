@@ -1,0 +1,29 @@
+[
+  {
+    "source_type": "pr",
+    "external_ref": "pr-101",
+    "title": "Harden admin middleware",
+    "body": "Updates require_admin and related auth checks.",
+    "author": "alice",
+    "labels": ["auth", "security"],
+    "merged_at": "2026-03-20T00:00:00Z",
+    "related_paths": ["src/auth.py", "require_admin"]
+  },
+  {
+    "source_type": "commit",
+    "external_ref": "abc123",
+    "title": "Refine require_admin guard",
+    "body": "Adjusts admin authorization logic in src/auth.py.",
+    "author": "bob",
+    "related_paths": ["src/auth.py", "require_admin"]
+  },
+  {
+    "source_type": "issue",
+    "external_ref": "issue-77",
+    "title": "Admin route fails for privileged users",
+    "body": "Possible regression around require_admin.",
+    "author": "carol",
+    "labels": ["bug"],
+    "related_paths": ["require_admin"]
+  }
+]
