@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from repo_dependency_context_mcp.db.models import Repo, Tenant
+from repo_dependency_context_mcp.services.dependencies.parser import DependencyParserService
 from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
     VendorDocCandidate,
     VendorDocIngestService,
@@ -38,6 +39,10 @@ def test_mcp_tools_return_structured_results(db_session, tmp_path: Path) -> None
         ),
         encoding="utf-8",
     )
+    (repo_root / "requirements.txt").write_text(
+        "fastapi==0.115.0\n",
+        encoding="utf-8",
+    )
 
     tenant = Tenant(name="Tenant MCP", slug="tenant-mcp")
     db_session.add(tenant)
@@ -59,6 +64,11 @@ def test_mcp_tools_return_structured_results(db_session, tmp_path: Path) -> None
         repo_id=repo.id,
         repo_path=repo_root,
         acl_scope={"visibility": "private"},
+    )
+    DependencyParserService(db_session).parse_and_persist(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
     )
     VendorDocIngestService(
         db_session,
@@ -111,9 +121,12 @@ def test_mcp_tools_return_structured_results(db_session, tmp_path: Path) -> None
 
     dependency_notes = service.get_dependency_notes(
         tenant_id=tenant.id,
+        repo_id=repo.id,
         package_name="fastapi",
         version_range="0.115.x",
         topic="migration",
     )
-    assert len(dependency_notes["evidence"]) == 1
+    assert len(dependency_notes["evidence"]) == 2
     assert dependency_notes["evidence"][0]["authority"] == "official"
+    assert dependency_notes["evidence"][1]["authority"] == "repo"
+    assert dependency_notes["evidence"][1]["path_or_url"] == "requirements.txt"

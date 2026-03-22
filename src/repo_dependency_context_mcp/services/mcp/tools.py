@@ -8,7 +8,14 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from repo_dependency_context_mcp.db.models import Chunk, DependencyDoc, Document, QueryLog, Source
+from repo_dependency_context_mcp.db.models import (
+    Chunk,
+    Dependency,
+    DependencyDoc,
+    Document,
+    QueryLog,
+    Source,
+)
 from repo_dependency_context_mcp.services.retrieval.search import SearchContextService
 
 JSONDict = dict[str, Any]
@@ -147,6 +154,7 @@ class MCPToolService:
     def get_dependency_notes(
         self,
         tenant_id: uuid.UUID,
+        repo_id: uuid.UUID | None,
         package_name: str,
         version_range: str | None = None,
         topic: str | None = None,
@@ -180,10 +188,44 @@ class MCPToolService:
                 }
             )
 
+        if repo_id is not None:
+            dep_stmt = (
+                select(Dependency)
+                .where(Dependency.tenant_id == tenant_id)
+                .where(Dependency.repo_id == repo_id)
+                .where(Dependency.package_name == package_name)
+            )
+            repo_dependencies = self.session.scalars(dep_stmt.limit(top_k)).all()
+            for dependency in repo_dependencies:
+                evidence.append(
+                    {
+                        "source_type": "dependency_manifest",
+                        "title": f"{dependency.package_name} dependency declaration",
+                        "path_or_url": str(
+                            dependency.metadata_json.get("source_file", "<unknown-manifest>")
+                        ),
+                        "symbol_path": None,
+                        "snippet": (
+                            f"{dependency.package_name} {dependency.declared_version} "
+                            f"declared via {dependency.manager}"
+                        ),
+                        "why_selected": self._why_selected_repo_dependency(
+                            dependency=dependency,
+                            topic=topic,
+                        ),
+                        "freshness_reason": (
+                            "Freshness: repository dependency declaration "
+                            "from latest local ingest snapshot"
+                        ),
+                        "authority": "repo",
+                        "version_range": dependency.declared_version,
+                    }
+                )
+
         self.session.add(
             QueryLog(
                 tenant_id=tenant_id,
-                repo_id=None,
+                repo_id=repo_id,
                 user_id=None,
                 query_text=f"dependency:{package_name}:{topic or ''}",
                 task_type="migration",
@@ -210,6 +252,15 @@ class MCPToolService:
             reasons.append(f"Mentions topic {topic}")
         if doc.doc_type:
             reasons.append(f"Document type is {doc.doc_type}")
+        return "; ".join(reasons)
+
+    def _why_selected_repo_dependency(self, dependency: Dependency, topic: str | None) -> str:
+        reasons = [f"Matches package {dependency.package_name}"]
+        source_file = dependency.metadata_json.get("source_file")
+        if source_file:
+            reasons.append(f"Declared in {source_file}")
+        if topic:
+            reasons.append(f"Context topic {topic}")
         return "; ".join(reasons)
 
 

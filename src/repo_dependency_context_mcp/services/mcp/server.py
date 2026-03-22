@@ -20,7 +20,10 @@ SessionFactory = Callable[[], AbstractContextManager | object]
 def build_mcp_server(session_factory: SessionFactory) -> FastMCP:
     server = FastMCP(
         name="Repo + Dependency Context MCP",
-        instructions="Return minimal sufficient evidence packs for repository and dependency context.",
+        instructions=(
+            "Return minimal sufficient evidence packs for repository "
+            "and dependency context."
+        ),
     )
 
     @server.tool(
@@ -77,12 +80,14 @@ def build_mcp_server(session_factory: SessionFactory) -> FastMCP:
         since_days: int = 90,
     ) -> RelatedChangesResponse:
         with _session_scope(session_factory) as session:
-            return RelatedChangesResponse.model_validate(MCPToolService(session).get_related_changes(
-                tenant_id=uuid.UUID(tenant_id),
-                repo_id=uuid.UUID(repo_id),
-                path_or_symbol=path_or_symbol,
-                since_days=since_days,
-            ))
+            return RelatedChangesResponse.model_validate(
+                MCPToolService(session).get_related_changes(
+                    tenant_id=uuid.UUID(tenant_id),
+                    repo_id=uuid.UUID(repo_id),
+                    path_or_symbol=path_or_symbol,
+                    since_days=since_days,
+                )
+            )
 
     @server.tool(
         name="get_dependency_notes",
@@ -91,19 +96,23 @@ def build_mcp_server(session_factory: SessionFactory) -> FastMCP:
     )
     def get_dependency_notes(
         tenant_id: str,
+        repo_id: str | None,
         package_name: str,
         version_range: str | None = None,
         topic: str | None = None,
         top_k: int = 5,
     ) -> DependencyNotesResponse:
         with _session_scope(session_factory) as session:
-            return DependencyNotesResponse.model_validate(MCPToolService(session).get_dependency_notes(
-                tenant_id=uuid.UUID(tenant_id),
-                package_name=package_name,
-                version_range=version_range,
-                topic=topic,
-                top_k=top_k,
-            ))
+            return DependencyNotesResponse.model_validate(
+                MCPToolService(session).get_dependency_notes(
+                    tenant_id=uuid.UUID(tenant_id),
+                    repo_id=uuid.UUID(repo_id) if repo_id else None,
+                    package_name=package_name,
+                    version_range=version_range,
+                    topic=topic,
+                    top_k=top_k,
+                )
+            )
 
     return server
 
