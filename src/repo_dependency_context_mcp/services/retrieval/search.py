@@ -62,7 +62,11 @@ class SearchContextService:
             normalized_query=normalized_query,
             limit=max(top_k, 8),
         )
-        candidates = self._rerank_candidates(normalized_query, candidates)[:top_k]
+        candidates = self._rerank_candidates(
+            normalized_query,
+            candidates,
+            task_type=task_type,
+        )[:top_k]
 
         evidence: list[dict] = []
         for rank, candidate in enumerate(candidates, start=1):
@@ -215,13 +219,25 @@ class SearchContextService:
         candidates.sort(key=lambda item: item.score_total, reverse=True)
         return candidates
 
-    def _rerank_candidates(self, query: str, candidates: list[Candidate]) -> list[Candidate]:
+    def _rerank_candidates(
+        self,
+        query: str,
+        candidates: list[Candidate],
+        task_type: str | None,
+    ) -> list[Candidate]:
         provider = get_rerank_provider(self.settings)
         items = [
             RerankItem(
                 item_id=str(candidate.chunk.id),
                 text=f"{candidate.chunk.context_prefix}\n{candidate.chunk.text}",
                 base_score=candidate.score_total,
+                metadata={
+                    "task_type": task_type or "",
+                    "source_type": candidate.source.source_type,
+                    "path_or_url": candidate.source.path_or_url,
+                    "symbol_path": candidate.chunk.symbol_path or "",
+                    "authority": candidate.chunk.authority,
+                },
             )
             for candidate in candidates
         ]
