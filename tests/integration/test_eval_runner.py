@@ -623,3 +623,100 @@ cases:
         < 1.0
     )
     assert summary["evidence_contract_score"] < 1.0
+
+
+def test_eval_runner_emits_per_case_diagnostics_for_failures(
+    db_session,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    tenant = Tenant(name="Tenant Eval Diagnostics", slug="tenant-eval-diagnostics")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-diagnostics",
+        provider="local",
+        external_id="sample-repo-diagnostics",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    freshness_reason = (
+        "Freshness: repository content from latest local ingest snapshot"
+    )
+    runner = EvalRunnerService(db_session)
+    monkeypatch.setattr(
+        runner.tool_service,
+        "search_context",
+        lambda tenant_id, repo_id, query, task_type, top_k: {
+            "evidence": [
+                {
+                    "source_type": "repo_doc",
+                    "path_or_url": "docs/auth.md",
+                    "authority": "repo",
+                    "freshness_reason": freshness_reason,
+                    "why_selected": "Signal: lexical match",
+                },
+                {
+                    "source_type": "repo_code",
+                    "path_or_url": "src/auth.py",
+                    "authority": "repo",
+                    "freshness_reason": freshness_reason,
+                    "why_selected": "Signal: lexical match",
+                },
+            ],
+        },
+    )
+
+    dataset_path = tmp_path / "eval_diagnostics.yaml"
+    dataset_path.write_text(
+        f"""
+name: diagnostics-eval
+description: eval diagnostics on failing case
+cases:
+  - id: diagnostics_case
+    query: diagnostics query
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/missing.py
+    must_rank_before:
+      - higher: repo_code:src/auth.py
+        lower: repo_doc:docs/auth.md
+    expected_top_source: repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+
+    summary = runner.run_from_yaml(dataset_path)
+    case_result = db_session.scalar(select(EvalCaseResult))
+
+    assert case_result is not None
+    diagnostics = case_result.result_payload["diagnostics"]
+    failed_checks = {item["check"]: item for item in diagnostics["failed_checks"]}
+
+    assert failed_checks["must_hit_sources"]["expected"] == ["repo_code:src/missing.py"]
+    assert failed_checks["must_hit_sources"]["actual"] == [
+        "repo_doc:docs/auth.md",
+        "repo_code:src/auth.py",
+    ]
+    assert failed_checks["rank_order_ok"]["expected"] == [
+        {"higher": "repo_code:src/auth.py", "lower": "repo_doc:docs/auth.md"}
+    ]
+    assert failed_checks["top_source_ok"]["expected"] == "repo_code:src/auth.py"
+    assert failed_checks["top_source_ok"]["actual"] == "repo_doc:docs/auth.md"
+    assert diagnostics["actual"]["source_keys"] == [
+        "repo_doc:docs/auth.md",
+        "repo_code:src/auth.py",
+    ]
+    assert summary["failed_case_count"] == 1
+    assert summary["failing_checks"] == {
+        "must_hit_sources": 1,
+        "rank_order_ok": 1,
+        "top_source_ok": 1,
+    }

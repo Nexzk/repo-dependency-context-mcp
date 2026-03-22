@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -41,6 +43,9 @@ class EvalMetrics:
         return (self.retrieval_score + self.evidence_contract_score) / 2
 
 
+JSONDict = dict[str, Any]
+
+
 class EvalRunnerService:
     def __init__(self, session) -> None:
         self.session = session
@@ -65,6 +70,8 @@ class EvalRunnerService:
         retrieval_scores: list[float] = []
         evidence_scores: list[float] = []
         overall_scores: list[float] = []
+        failing_checks_counter: Counter[str] = Counter()
+        failed_case_count = 0
 
         for case_payload in payload.get("cases", []):
             eval_case = EvalCase(
@@ -115,11 +122,34 @@ class EvalRunnerService:
                 must_rank_before=case_payload.get("must_rank_before", []),
                 expected_top_source=case_payload.get("expected_top_source"),
             )
+            diagnostics = self._build_diagnostics(
+                evidence=response["evidence"],
+                must_hit_sources=case_payload.get("must_hit_sources", []),
+                must_not_hit_sources=case_payload.get("must_not_hit_sources", []),
+                expected_authorities=case_payload.get("expected_authorities", []),
+                expected_freshness_contains=case_payload.get(
+                    "expected_freshness_contains",
+                    [],
+                ),
+                expected_why_selected_contains=case_payload.get(
+                    "expected_why_selected_contains",
+                    [],
+                ),
+                min_evidence_count=case_payload.get("min_evidence_count"),
+                max_evidence_count=case_payload.get("max_evidence_count"),
+                must_rank_before=case_payload.get("must_rank_before", []),
+                expected_top_source=case_payload.get("expected_top_source"),
+            )
             recalls.append(metrics.recall_at_5)
             reciprocal_ranks.append(metrics.mrr)
             retrieval_scores.append(metrics.retrieval_score)
             evidence_scores.append(metrics.evidence_contract_score)
             overall_scores.append(metrics.overall_score)
+            if diagnostics["failed_checks"]:
+                failed_case_count += 1
+                failing_checks_counter.update(
+                    item["check"] for item in diagnostics["failed_checks"]
+                )
 
             self.session.add(
                 EvalCaseResult(
@@ -130,6 +160,7 @@ class EvalRunnerService:
                     leakage_count=0,
                     result_payload={
                         "evidence": response["evidence"],
+                        "diagnostics": diagnostics,
                         "scores": {
                             "recall_at_5": metrics.recall_at_5,
                             "mrr": metrics.mrr,
@@ -149,6 +180,8 @@ class EvalRunnerService:
 
         summary = {
             "case_count": len(recalls),
+            "failed_case_count": failed_case_count,
+            "failing_checks": dict(failing_checks_counter),
             "recall_at_5": sum(recalls) / len(recalls) if recalls else 0.0,
             "mrr": sum(reciprocal_ranks) / len(reciprocal_ranks) if reciprocal_ranks else 0.0,
             "retrieval_score": (
@@ -188,6 +221,122 @@ class EvalRunnerService:
                 top_k=5,
             )
         raise ValueError(f"unsupported eval tool: {tool_name}")
+
+    def _build_diagnostics(
+        self,
+        evidence: list[dict],
+        must_hit_sources: list[str],
+        must_not_hit_sources: list[str],
+        expected_authorities: list[str],
+        expected_freshness_contains: list[str],
+        expected_why_selected_contains: list[str],
+        min_evidence_count: int | None,
+        max_evidence_count: int | None,
+        must_rank_before: list[dict[str, str]],
+        expected_top_source: str | None,
+    ) -> JSONDict:
+        source_keys = [f"{item['source_type']}:{item['path_or_url']}" for item in evidence]
+        authorities = [str(item.get("authority", "")) for item in evidence]
+        freshness_reasons = [str(item.get("freshness_reason", "")) for item in evidence]
+        why_selected = [str(item.get("why_selected", "")) for item in evidence]
+
+        failed_checks: list[JSONDict] = []
+        if must_hit_sources and not any(source in source_keys for source in must_hit_sources):
+            failed_checks.append(
+                {
+                    "check": "must_hit_sources",
+                    "expected": must_hit_sources,
+                    "actual": source_keys,
+                }
+            )
+        unexpected_sources = [
+            source for source in must_not_hit_sources if source in source_keys
+        ]
+        if unexpected_sources:
+            failed_checks.append(
+                {
+                    "check": "must_not_hit_sources",
+                    "expected": must_not_hit_sources,
+                    "actual": unexpected_sources,
+                }
+            )
+        missing_authorities = [
+            authority for authority in expected_authorities if authority not in set(authorities)
+        ]
+        if missing_authorities:
+            failed_checks.append(
+                {
+                    "check": "authority_match",
+                    "expected": expected_authorities,
+                    "actual": authorities,
+                }
+            )
+        missing_freshness = _missing_expected_substrings(
+            values=freshness_reasons,
+            expected=expected_freshness_contains,
+        )
+        if missing_freshness:
+            failed_checks.append(
+                {
+                    "check": "freshness_reason_match",
+                    "expected": expected_freshness_contains,
+                    "actual": freshness_reasons,
+                }
+            )
+        missing_why = _missing_expected_substrings(
+            values=why_selected,
+            expected=expected_why_selected_contains,
+        )
+        if missing_why:
+            failed_checks.append(
+                {
+                    "check": "why_selected_match",
+                    "expected": expected_why_selected_contains,
+                    "actual": why_selected,
+                }
+            )
+        if min_evidence_count is not None and len(evidence) < min_evidence_count:
+            failed_checks.append(
+                {
+                    "check": "evidence_count_ok",
+                    "expected": {"min": min_evidence_count, "max": max_evidence_count},
+                    "actual": len(evidence),
+                }
+            )
+        if max_evidence_count is not None and len(evidence) > max_evidence_count:
+            failed_checks.append(
+                {
+                    "check": "evidence_count_ok",
+                    "expected": {"min": min_evidence_count, "max": max_evidence_count},
+                    "actual": len(evidence),
+                }
+            )
+        if _rank_order_ok(source_keys, must_rank_before) == 0.0:
+            failed_checks.append(
+                {
+                    "check": "rank_order_ok",
+                    "expected": must_rank_before,
+                    "actual": source_keys,
+                }
+            )
+        if _top_source_ok(source_keys, expected_top_source) == 0.0:
+            failed_checks.append(
+                {
+                    "check": "top_source_ok",
+                    "expected": expected_top_source,
+                    "actual": source_keys[0] if source_keys else None,
+                }
+            )
+
+        return {
+            "failed_checks": failed_checks,
+            "actual": {
+                "source_keys": source_keys,
+                "authorities": authorities,
+                "freshness_reasons": freshness_reasons,
+                "why_selected": why_selected,
+            },
+        }
 
     def _score_case(
         self,
@@ -266,6 +415,13 @@ def _all_expected_substrings_match(values: list[str], expected: list[str]) -> fl
         return 1.0
     haystack = " ".join(values).lower()
     return 1.0 if all(item.lower() in haystack for item in expected) else 0.0
+
+
+def _missing_expected_substrings(values: list[str], expected: list[str]) -> list[str]:
+    if not expected:
+        return []
+    haystack = " ".join(values).lower()
+    return [item for item in expected if item.lower() not in haystack]
 
 
 def _evidence_count_ok(
