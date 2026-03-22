@@ -134,7 +134,10 @@ class VendorDocIngestService:
                     )
                     if resolved_doc_type is None:
                         continue
-                    if request.include_doc_types and resolved_doc_type not in request.include_doc_types:
+                    if (
+                        request.include_doc_types
+                        and resolved_doc_type not in request.include_doc_types
+                    ):
                         continue
                     candidates.append(
                         VendorDocCandidate(
