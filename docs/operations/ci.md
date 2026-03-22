@@ -14,6 +14,8 @@ The repository includes a minimal GitHub Actions workflow at `.github/workflows/
 
 The workflow intentionally mirrors the current local MVP verification path.
 
+The test suite still uses a shared PostgreSQL database. Test fixture setup now takes a PostgreSQL advisory lock before truncating tables, which prevents cross-process deadlocks if multiple local `pytest` runs overlap, but it does not make the suite meaningfully parallel.
+
 It does not yet enforce:
 
 - smoke script execution
