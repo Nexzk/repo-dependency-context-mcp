@@ -2,7 +2,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from repo_dependency_context_mcp.db.models import EvalCaseResult, EvalRun, Repo, Tenant
+from repo_dependency_context_mcp.db.models import EvalCase, EvalCaseResult, EvalRun, Repo, Tenant
 from repo_dependency_context_mcp.services.eval.runner import EvalRunnerService
 from repo_dependency_context_mcp.services.ingest.local_repo import LocalRepoIngestService
 
@@ -173,34 +173,11 @@ cases:
 def test_eval_runner_scores_source_rank_order_constraints(
     db_session,
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    repo_root = tmp_path / "sample_repo_rank_order"
-    repo_root.mkdir()
-    (repo_root / "src").mkdir()
-    (repo_root / "docs").mkdir()
-
-    (repo_root / "src" / "auth.py").write_text(
-        "\n".join(
-            [
-                "def require_admin(user):",
-                "    if not user.get('is_admin'):",
-                "        raise PermissionError('admin only')",
-                "    return True",
-            ]
-        ),
-        encoding="utf-8",
+    freshness_reason = (
+        "Freshness: repository content from latest local ingest snapshot"
     )
-    (repo_root / "docs" / "auth.md").write_text(
-        "\n".join(
-            [
-                "# Auth Overview",
-                "",
-                "The require_admin helper enforces admin access checks.",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
     tenant = Tenant(name="Tenant Eval Rank", slug="tenant-eval-rank")
     db_session.add(tenant)
     db_session.flush()
@@ -216,11 +193,48 @@ def test_eval_runner_scores_source_rank_order_constraints(
     db_session.add(repo)
     db_session.commit()
 
-    LocalRepoIngestService(db_session).ingest_repo(
-        tenant_id=tenant.id,
-        repo_id=repo.id,
-        repo_path=repo_root,
-        acl_scope={"visibility": "private"},
+    evidence_by_query = {
+        "rank ok query": [
+            {
+                "source_type": "repo_code",
+                "path_or_url": "src/auth.py",
+                "authority": "repo",
+                "freshness_reason": freshness_reason,
+                "why_selected": "Signal: lexical match",
+            },
+            {
+                "source_type": "repo_doc",
+                "path_or_url": "docs/auth.md",
+                "authority": "repo",
+                "freshness_reason": freshness_reason,
+                "why_selected": "Signal: lexical match",
+            },
+        ],
+        "rank bad query": [
+            {
+                "source_type": "repo_doc",
+                "path_or_url": "docs/auth.md",
+                "authority": "repo",
+                "freshness_reason": freshness_reason,
+                "why_selected": "Signal: lexical match",
+            },
+            {
+                "source_type": "repo_code",
+                "path_or_url": "src/auth.py",
+                "authority": "repo",
+                "freshness_reason": freshness_reason,
+                "why_selected": "Signal: lexical match",
+            },
+        ],
+    }
+
+    runner = EvalRunnerService(db_session)
+    monkeypatch.setattr(
+        runner.tool_service,
+        "search_context",
+        lambda tenant_id, repo_id, query, task_type, top_k: {
+            "evidence": evidence_by_query[query],
+        },
     )
 
     dataset_path = tmp_path / "eval_rank_order.yaml"
@@ -230,7 +244,7 @@ name: rank-order-eval
 description: eval source-rank order contract
 cases:
   - id: locate_auth_rank_order_ok
-    query: where is require_admin defined
+    query: rank ok query
     task_type: locate
     tenant_id: "{tenant.id}"
     repo_id: "{repo.id}"
@@ -240,25 +254,43 @@ cases:
       - higher: repo_code:src/auth.py
         lower: repo_doc:docs/auth.md
   - id: locate_auth_rank_order_bad
-    query: where is require_admin defined
+    query: rank bad query
     task_type: locate
     tenant_id: "{tenant.id}"
     repo_id: "{repo.id}"
     must_hit_sources:
       - repo_code:src/auth.py
     must_rank_before:
-      - higher: repo_doc:docs/auth.md
-        lower: repo_code:src/auth.py
+      - higher: repo_code:src/auth.py
+        lower: repo_doc:docs/auth.md
 """.strip(),
         encoding="utf-8",
     )
 
-    summary = EvalRunnerService(db_session).run_from_yaml(dataset_path)
-    case_results = list(db_session.scalars(select(EvalCaseResult).order_by(EvalCaseResult.id)))
+    summary = runner.run_from_yaml(dataset_path)
+    eval_cases = {
+        case.id: case.name for case in db_session.scalars(select(EvalCase)).all()
+    }
+    case_results = {
+        eval_cases[result.eval_case_id]: result
+        for result in db_session.scalars(select(EvalCaseResult)).all()
+    }
 
     assert len(case_results) == 2
-    assert case_results[0].result_payload["scores"]["rank_order_ok"] == 1.0
-    assert case_results[1].result_payload["scores"]["rank_order_ok"] == 0.0
-    assert case_results[0].result_payload["scores"]["evidence_contract_score"] == 1.0
-    assert case_results[1].result_payload["scores"]["evidence_contract_score"] < 1.0
+    assert (
+        case_results["locate_auth_rank_order_ok"].result_payload["scores"]["rank_order_ok"]
+        == 1.0
+    )
+    assert (
+        case_results["locate_auth_rank_order_bad"].result_payload["scores"]["rank_order_ok"]
+        == 0.0
+    )
+    assert (
+        case_results["locate_auth_rank_order_ok"].result_payload["scores"]["evidence_contract_score"]
+        == 1.0
+    )
+    assert (
+        case_results["locate_auth_rank_order_bad"].result_payload["scores"]["evidence_contract_score"]
+        < 1.0
+    )
     assert summary["evidence_contract_score"] == 0.9
