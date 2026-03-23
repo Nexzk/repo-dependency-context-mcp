@@ -130,7 +130,11 @@ Notes:
 4. Run eval with `rdcmcp eval run <dataset.yaml>`
 5. For baseline comparison, use `rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name>`
 6. For profile-matrix experiments, use `rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2>`
-5. Inspect `GET /api/observability/metrics`
+7. For machine-readable matrix output, use `--json-only`
+8. For tabular matrix output, use `--table-only`
+9. For the current best matrix profile, use `--best-only`
+10. For the lowest-failure matrix profile, use `--failures-only`
+11. Inspect `GET /api/observability/metrics`
 
 For a structured demo path, see `docs/operations/demo-script.md`.
 For release validation, see `docs/operations/release-checklist.md`.
