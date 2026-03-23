@@ -87,6 +87,10 @@ def _parse_csv_flag(args: list[str], flag: str) -> list[str] | None:
     return values or None
 
 
+def _has_flag(args: list[str], flag: str) -> bool:
+    return flag in args
+
+
 def main() -> None:
     settings = Settings()
     if len(sys.argv) >= 3 and sys.argv[1:3] == ["mcp", "stdio"]:
@@ -155,6 +159,8 @@ def main() -> None:
         baseline_dataset_name = _parse_flag_value(args[1:], "--baseline-dataset-name")
         candidate_profiles = _parse_csv_flag(args[1:], "--candidate-profiles")
         rerank_profiles = _parse_csv_flag(args[1:], "--rerank-profiles")
+        json_only = _has_flag(args[1:], "--json-only")
+        table_only = _has_flag(args[1:], "--table-only")
         with get_db_session() as session:
             runner = EvalRunnerService(session)
             if candidate_profiles or rerank_profiles:
@@ -173,8 +179,9 @@ def main() -> None:
                     baseline_dataset_name=baseline_dataset_name,
                 )
         matrix_table = _render_eval_matrix_table(result)
-        if matrix_table:
+        if matrix_table and not json_only:
             print(matrix_table)
-        print(result)
+        if not table_only or matrix_table is None:
+            print(result)
         return
     print(f"{settings.app_name} [{settings.env}]")
