@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from sqlalchemy import desc, select
 
 from repo_dependency_context_mcp.db.models import EvalCase, EvalCaseResult, EvalDataset, EvalRun
 from repo_dependency_context_mcp.services.mcp.tools import MCPToolService
@@ -51,7 +52,11 @@ class EvalRunnerService:
         self.session = session
         self.tool_service = MCPToolService(session)
 
-    def run_from_yaml(self, dataset_path: Path) -> dict:
+    def run_from_yaml(
+        self,
+        dataset_path: Path,
+        baseline_dataset_name: str | None = None,
+    ) -> dict:
         payload = yaml.safe_load(dataset_path.read_text(encoding="utf-8"))
         dataset = EvalDataset(
             name=payload["name"],
@@ -199,7 +204,75 @@ class EvalRunnerService:
         eval_run.status = "completed"
         eval_run.summary_json = summary
         self.session.commit()
+        selected_eval_comparison = self._build_selected_eval_comparison(
+            current_run_id=eval_run.id,
+            baseline_dataset_name=baseline_dataset_name,
+        )
+        if selected_eval_comparison is not None:
+            summary["selected_eval_comparison"] = selected_eval_comparison
         return summary
+
+    def _build_selected_eval_comparison(
+        self,
+        current_run_id: uuid.UUID,
+        baseline_dataset_name: str | None,
+    ) -> JSONDict | None:
+        if baseline_dataset_name is None:
+            return None
+
+        current = self.session.get(EvalRun, current_run_id)
+        if current is None:
+            return None
+
+        baseline = self.session.scalar(
+            select(EvalRun)
+            .join(EvalDataset, EvalDataset.id == EvalRun.dataset_id)
+            .where(EvalDataset.name == baseline_dataset_name)
+            .order_by(desc(EvalRun.created_at))
+            .limit(1)
+        )
+        if baseline is None:
+            return None
+
+        current_summary = current.summary_json
+        baseline_summary = baseline.summary_json
+        return {
+            "baseline_source": baseline_dataset_name,
+            "current_dataset_id": str(current.dataset_id),
+            "previous_dataset_id": str(baseline.dataset_id),
+            "current_overall_score": float(current_summary.get("overall_score", 0.0)),
+            "previous_overall_score": float(baseline_summary.get("overall_score", 0.0)),
+            "delta_overall_score": float(current_summary.get("overall_score", 0.0))
+            - float(baseline_summary.get("overall_score", 0.0)),
+            "current_retrieval_score": float(
+                current_summary.get("retrieval_score", 0.0)
+            ),
+            "previous_retrieval_score": float(
+                baseline_summary.get("retrieval_score", 0.0)
+            ),
+            "delta_retrieval_score": float(current_summary.get("retrieval_score", 0.0))
+            - float(baseline_summary.get("retrieval_score", 0.0)),
+            "current_evidence_contract_score": float(
+                current_summary.get("evidence_contract_score", 0.0)
+            ),
+            "previous_evidence_contract_score": float(
+                baseline_summary.get("evidence_contract_score", 0.0)
+            ),
+            "delta_evidence_contract_score": float(
+                current_summary.get("evidence_contract_score", 0.0)
+            )
+            - float(baseline_summary.get("evidence_contract_score", 0.0)),
+            "current_failed_case_count": int(
+                current_summary.get("failed_case_count", 0)
+            ),
+            "previous_failed_case_count": int(
+                baseline_summary.get("failed_case_count", 0)
+            ),
+            "delta_failed_case_count": int(current_summary.get("failed_case_count", 0))
+            - int(baseline_summary.get("failed_case_count", 0)),
+            "current_failing_checks": current_summary.get("failing_checks", {}),
+            "previous_failing_checks": baseline_summary.get("failing_checks", {}),
+        }
 
     def _execute_case(self, eval_case: EvalCase, case_payload: dict) -> dict:
         tool_name = case_payload.get("tool", "search_context")
