@@ -179,14 +179,39 @@ cases:
 """.strip(),
             encoding="utf-8",
         )
-        eval_summary = run_eval_task.run(str(dataset_path))
+        baseline_dataset_path = tmp_path / "eval_baseline.yaml"
+        baseline_dataset_path.write_text(
+            f"""
+name: jobs-eval-baseline
+description: baseline eval by task
+cases:
+  - id: locate_auth_baseline
+    query: require_admin
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+    acceptable_sources: []
+    must_not_hit_sources: []
+    requires_clarification: false
+""".strip(),
+            encoding="utf-8",
+        )
+        run_eval_task.run(str(baseline_dataset_path))
+
+        eval_summary = run_eval_task.run(
+            str(dataset_path),
+            baseline_dataset_name="jobs-eval-baseline",
+        )
         assert eval_summary["case_count"] == 1
+        assert eval_summary["selected_eval_comparison"]["baseline_source"] == "jobs-eval-baseline"
 
         assert db_session.scalar(
             select(func.count()).select_from(Source).where(Source.source_type == "pr")
         ) == 1
         assert db_session.scalar(select(func.count()).select_from(DependencyDoc)) == 3
-        assert db_session.scalar(select(func.count()).select_from(EvalRun)) == 1
+        assert db_session.scalar(select(func.count()).select_from(EvalRun)) == 2
         assert db_session.scalar(
             select(func.count()).select_from(SyncRun).where(SyncRun.source_kind == "github_prs")
         ) == 1

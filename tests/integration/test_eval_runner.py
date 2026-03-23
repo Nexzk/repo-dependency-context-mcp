@@ -1,16 +1,26 @@
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from repo_dependency_context_mcp.db.models import EvalCase, EvalCaseResult, EvalRun, Repo, Tenant
+from repo_dependency_context_mcp.db.models import (
+    EvalCase,
+    EvalCaseResult,
+    EvalRun,
+    Repo,
+    Tenant,
+)
+from repo_dependency_context_mcp.main import app
 from repo_dependency_context_mcp.services.dependencies.parser import DependencyParserService
 from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
     VendorDocCandidate,
     VendorDocIngestService,
 )
 from repo_dependency_context_mcp.services.eval.runner import EvalRunnerService
-from repo_dependency_context_mcp.services.ingest.change_metadata import ChangeMetadataIngestService
+from repo_dependency_context_mcp.services.ingest.change_metadata import (
+    ChangeMetadataIngestService,
+)
 from repo_dependency_context_mcp.services.ingest.local_repo import LocalRepoIngestService
 
 
@@ -88,6 +98,186 @@ cases:
     assert case_result.recall_at_k == 1.0
     assert case_result.mrr == 1.0
     assert case_result.leakage_count == 0
+
+
+def test_eval_runner_returns_baseline_comparison_when_requested(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_eval_baseline"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Eval Baseline", slug="tenant-eval-baseline")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-eval-baseline",
+        provider="local",
+        external_id="sample-repo-eval-baseline",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    baseline_dataset = tmp_path / "eval_runner_baseline.yaml"
+    baseline_dataset.write_text(
+        f"""
+name: runner-baseline-dataset
+description: baseline eval
+cases:
+  - id: locate_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+    EvalRunnerService(db_session).run_from_yaml(baseline_dataset)
+
+    current_dataset = tmp_path / "eval_runner_current.yaml"
+    current_dataset.write_text(
+        f"""
+name: runner-current-dataset
+description: failing current eval
+cases:
+  - id: missing_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/missing.py
+    expected_top_source: repo_code:src/missing.py
+""".strip(),
+        encoding="utf-8",
+    )
+
+    summary = EvalRunnerService(db_session).run_from_yaml(
+        current_dataset,
+        baseline_dataset_name="runner-baseline-dataset",
+    )
+
+    comparison = summary["selected_eval_comparison"]
+    assert comparison["baseline_source"] == "runner-baseline-dataset"
+    assert comparison["delta_overall_score"] < 0
+    assert comparison["delta_failed_case_count"] > 0
+
+
+def test_eval_api_returns_baseline_comparison_when_requested(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_eval_api_baseline"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Eval API Baseline", slug="tenant-eval-api-baseline")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-eval-api-baseline",
+        provider="local",
+        external_id="sample-repo-eval-api-baseline",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    baseline_dataset = tmp_path / "eval_api_baseline.yaml"
+    baseline_dataset.write_text(
+        f"""
+name: api-baseline-dataset
+description: baseline eval
+cases:
+  - id: locate_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+    EvalRunnerService(db_session).run_from_yaml(baseline_dataset)
+
+    current_dataset = tmp_path / "eval_api_current.yaml"
+    current_dataset.write_text(
+        f"""
+name: api-current-dataset
+description: failing current eval
+cases:
+  - id: missing_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/missing.py
+    expected_top_source: repo_code:src/missing.py
+""".strip(),
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/eval/run",
+        json={
+            "dataset_path": str(current_dataset),
+            "baseline_dataset_name": "api-baseline-dataset",
+        },
+    )
+
+    assert response.status_code == 200
+    comparison = response.json()["selected_eval_comparison"]
+    assert comparison["baseline_source"] == "api-baseline-dataset"
+    assert comparison["delta_overall_score"] < 0
 
 
 def test_eval_runner_scores_evidence_contract_fields(db_session, tmp_path: Path) -> None:

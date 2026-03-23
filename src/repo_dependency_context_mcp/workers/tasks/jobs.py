@@ -147,6 +147,12 @@ def discover_vendor_docs_task(
 
 
 @celery_app.task(name="rdcmcp.run_eval")
-def run_eval_task(dataset_path: str) -> dict:
+def run_eval_task(
+    dataset_path: str,
+    baseline_dataset_name: str | None = None,
+) -> dict:
     with get_db_session() as session:
-        return EvalRunnerService(session).run_from_yaml(Path(dataset_path))
+        return EvalRunnerService(session).run_from_yaml(
+            Path(dataset_path),
+            baseline_dataset_name=baseline_dataset_name,
+        )
