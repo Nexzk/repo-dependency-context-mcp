@@ -33,6 +33,7 @@ def metrics() -> dict:
         )
         recent_eval_score_trend = build_recent_eval_score_trend(latest_eval_runs)
         recent_eval_score_summary = summarize_recent_eval_scores(latest_eval_runs)
+        latest_eval_comparison = build_latest_eval_comparison(latest_eval_runs)
         return {
             "ingest_jobs": session.scalar(select(func.count()).select_from(IngestJob)) or 0,
             "query_logs": session.scalar(select(func.count()).select_from(QueryLog)) or 0,
@@ -49,6 +50,7 @@ def metrics() -> dict:
             "recent_eval_window": len(latest_eval_runs),
             "recent_eval_score_trend": recent_eval_score_trend,
             "recent_eval_score_summary": recent_eval_score_summary,
+            "latest_eval_comparison": latest_eval_comparison,
             "latest_sync_runs": [
                 {
                     "source_kind": run.source_kind,
@@ -163,4 +165,43 @@ def summarize_recent_eval_scores(runs: list[EvalRun]) -> dict:
         "avg_overall_score": sum(overall_scores) / count,
         "avg_retrieval_score": sum(retrieval_scores) / count,
         "avg_evidence_contract_score": sum(evidence_scores) / count,
+    }
+
+
+def build_latest_eval_comparison(runs: list[EvalRun]) -> dict | None:
+    if len(runs) < 2:
+        return None
+
+    current = runs[0]
+    previous = runs[1]
+    current_summary = current.summary_json
+    previous_summary = previous.summary_json
+
+    return {
+        "current_dataset_id": str(current.dataset_id),
+        "previous_dataset_id": str(previous.dataset_id),
+        "current_overall_score": float(current_summary.get("overall_score", 0.0)),
+        "previous_overall_score": float(previous_summary.get("overall_score", 0.0)),
+        "delta_overall_score": float(current_summary.get("overall_score", 0.0))
+        - float(previous_summary.get("overall_score", 0.0)),
+        "current_retrieval_score": float(current_summary.get("retrieval_score", 0.0)),
+        "previous_retrieval_score": float(previous_summary.get("retrieval_score", 0.0)),
+        "delta_retrieval_score": float(current_summary.get("retrieval_score", 0.0))
+        - float(previous_summary.get("retrieval_score", 0.0)),
+        "current_evidence_contract_score": float(
+            current_summary.get("evidence_contract_score", 0.0)
+        ),
+        "previous_evidence_contract_score": float(
+            previous_summary.get("evidence_contract_score", 0.0)
+        ),
+        "delta_evidence_contract_score": float(
+            current_summary.get("evidence_contract_score", 0.0)
+        )
+        - float(previous_summary.get("evidence_contract_score", 0.0)),
+        "current_failed_case_count": int(current_summary.get("failed_case_count", 0)),
+        "previous_failed_case_count": int(previous_summary.get("failed_case_count", 0)),
+        "delta_failed_case_count": int(current_summary.get("failed_case_count", 0))
+        - int(previous_summary.get("failed_case_count", 0)),
+        "current_failing_checks": current_summary.get("failing_checks", {}),
+        "previous_failing_checks": previous_summary.get("failing_checks", {}),
     }
