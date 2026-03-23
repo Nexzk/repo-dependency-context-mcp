@@ -17,6 +17,23 @@ from repo_dependency_context_mcp.services.ingest.github_metadata import GitHubMe
 from repo_dependency_context_mcp.services.mcp.server import build_mcp_server
 
 
+def _parse_flag_value(args: list[str], flag: str) -> str | None:
+    if flag not in args:
+        return None
+    index = args.index(flag)
+    if index + 1 >= len(args):
+        return None
+    return args[index + 1]
+
+
+def _parse_csv_flag(args: list[str], flag: str) -> list[str] | None:
+    value = _parse_flag_value(args, flag)
+    if value is None:
+        return None
+    values = [item.strip() for item in value.split(",") if item.strip()]
+    return values or None
+
+
 def main() -> None:
     settings = Settings()
     if len(sys.argv) >= 3 and sys.argv[1:3] == ["mcp", "stdio"]:
@@ -45,7 +62,13 @@ def main() -> None:
             ).fetch_and_ingest(
                 package_name=package_name,
                 ecosystem=ecosystem,
-                requests=[VendorDocFetchRequest(doc_type="release_notes", url=url, version_range=version_range)],
+                requests=[
+                    VendorDocFetchRequest(
+                        doc_type="release_notes",
+                        url=url,
+                        version_range=version_range,
+                    )
+                ],
             )
         print(result)
         return
@@ -74,8 +97,28 @@ def main() -> None:
         print(result)
         return
     if len(sys.argv) >= 4 and sys.argv[1:3] == ["eval", "run"]:
+        args = sys.argv[3:]
+        dataset_path = Path(args[0])
+        baseline_dataset_name = _parse_flag_value(args[1:], "--baseline-dataset-name")
+        candidate_profiles = _parse_csv_flag(args[1:], "--candidate-profiles")
+        rerank_profiles = _parse_csv_flag(args[1:], "--rerank-profiles")
         with get_db_session() as session:
-            result = EvalRunnerService(session).run_from_yaml(Path(sys.argv[3]))
+            runner = EvalRunnerService(session)
+            if candidate_profiles or rerank_profiles:
+                runner_settings = runner.tool_service.search_service.settings
+                result = runner.run_profile_matrix(
+                    dataset_path=dataset_path,
+                    candidate_profiles=candidate_profiles
+                    or [runner_settings.retrieval_candidate_profile],
+                    rerank_profiles=rerank_profiles
+                    or [runner_settings.retrieval_rerank_profile],
+                    baseline_dataset_name=baseline_dataset_name,
+                )
+            else:
+                result = runner.run_from_yaml(
+                    dataset_path,
+                    baseline_dataset_name=baseline_dataset_name,
+                )
         print(result)
         return
     print(f"{settings.app_name} [{settings.env}]")

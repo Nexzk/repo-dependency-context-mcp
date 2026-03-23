@@ -128,6 +128,8 @@ Notes:
 2. Local repo ingest
 3. Query via `POST /api/query/search`
 4. Run eval with `rdcmcp eval run <dataset.yaml>`
+5. For baseline comparison, use `rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name>`
+6. For profile-matrix experiments, use `rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2>`
 5. Inspect `GET /api/observability/metrics`
 
 For a structured demo path, see `docs/operations/demo-script.md`.
