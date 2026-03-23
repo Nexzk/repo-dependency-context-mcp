@@ -117,6 +117,30 @@ class SearchContextService:
         normalized_query: str,
         limit: int,
     ) -> list[Candidate]:
+        query_embedding = embed_text(normalized_query, self.settings)
+        lexical_candidates = self._retrieve_lexical_candidates(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            normalized_query=normalized_query,
+            limit=limit,
+            query_embedding=query_embedding,
+        )
+        dense_candidates = self._retrieve_dense_candidates(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            limit=limit,
+            query_embedding=query_embedding,
+        )
+        return self._merge_candidates(lexical_candidates, dense_candidates)
+
+    def _retrieve_lexical_candidates(
+        self,
+        tenant_id: uuid.UUID,
+        repo_id: uuid.UUID | None,
+        normalized_query: str,
+        limit: int,
+        query_embedding: list[float],
+    ) -> list[Candidate]:
         ts_query = func.plainto_tsquery("simple", normalized_query)
         lexical_stmt = (
             select(
@@ -149,75 +173,128 @@ class SearchContextService:
             )
             .limit(limit * 3)
         )
-
         lexical_rows = self.session.execute(lexical_stmt).all()
-        query_embedding = embed_text(normalized_query, self.settings)
         candidates: list[Candidate] = []
-
         for chunk, document, source, score_lexical in lexical_rows:
-            chunk_embedding = (
-                list(chunk.embedding)
-                if chunk.embedding is not None
-                else embed_text(chunk.text, self.settings)
-            )
-            score_dense = cosine_similarity(query_embedding, chunk_embedding)
-            score_authority = 1.0 if chunk.authority in {"repo", "official"} else 0.5
-            score_freshness = 1.0 if source.updated_at_source else 0.6
-            score_total = (
-                (float(score_lexical) * 0.6)
-                + (score_dense * 0.25)
-                + (score_authority * 0.1)
-                + (score_freshness * 0.05)
-            )
             candidates.append(
-                Candidate(
+                self._build_candidate(
                     chunk=chunk,
                     document=document,
                     source=source,
                     score_lexical=float(score_lexical or 0.0),
-                    score_dense=score_dense,
-                    score_authority=score_authority,
-                    score_freshness=score_freshness,
-                    score_total=score_total,
+                    query_embedding=query_embedding,
                 )
             )
+        return candidates
 
-        if candidates:
-            candidates.sort(key=lambda item: item.score_total, reverse=True)
-            return candidates
-
-        fallback_stmt = (
+    def _retrieve_dense_candidates(
+        self,
+        tenant_id: uuid.UUID,
+        repo_id: uuid.UUID | None,
+        limit: int,
+        query_embedding: list[float],
+    ) -> list[Candidate]:
+        dense_stmt = (
             select(Chunk, Document, Source)
             .join(Document, Document.id == Chunk.document_id)
             .join(Source, Source.id == Chunk.source_id)
             .where(Chunk.tenant_id == tenant_id)
             .where(Chunk.repo_id == repo_id if repo_id else Chunk.repo_id.is_(None))
-            .limit(limit * 3)
         )
-        fallback_rows = self.session.execute(fallback_stmt).all()
-        for chunk, document, source in fallback_rows:
-            score_dense = cosine_similarity(
-                query_embedding,
-                (
-                    list(chunk.embedding)
-                    if chunk.embedding is not None
-                    else embed_text(chunk.text, self.settings)
+        dense_rows = self.session.execute(dense_stmt).all()
+        candidates = [
+            self._build_candidate(
+                chunk=chunk,
+                document=document,
+                source=source,
+                score_lexical=0.0,
+                query_embedding=query_embedding,
+            )
+            for chunk, document, source in dense_rows
+        ]
+        candidates.sort(key=lambda item: item.score_dense, reverse=True)
+        return candidates[: limit * 3]
+
+    def _merge_candidates(
+        self,
+        lexical_candidates: list[Candidate],
+        dense_candidates: list[Candidate],
+    ) -> list[Candidate]:
+        merged: dict[uuid.UUID, Candidate] = {}
+        for candidate in [*lexical_candidates, *dense_candidates]:
+            current = merged.get(candidate.chunk.id)
+            if current is None:
+                merged[candidate.chunk.id] = candidate
+                continue
+            score_lexical = max(current.score_lexical, candidate.score_lexical)
+            score_dense = max(current.score_dense, candidate.score_dense)
+            score_authority = max(current.score_authority, candidate.score_authority)
+            score_freshness = max(current.score_freshness, candidate.score_freshness)
+            merged[candidate.chunk.id] = Candidate(
+                chunk=current.chunk,
+                document=current.document,
+                source=current.source,
+                score_lexical=score_lexical,
+                score_dense=score_dense,
+                score_authority=score_authority,
+                score_freshness=score_freshness,
+                score_total=self._score_candidate(
+                    score_lexical=score_lexical,
+                    score_dense=score_dense,
+                    score_authority=score_authority,
+                    score_freshness=score_freshness,
                 ),
             )
-            candidates.append(
-                Candidate(
-                    chunk=chunk,
-                    document=document,
-                    source=source,
-                    score_lexical=0.0,
-                    score_dense=score_dense,
-                    score_authority=1.0 if chunk.authority in {"repo", "official"} else 0.5,
-                    score_freshness=1.0 if source.updated_at_source else 0.6,
-                    score_total=score_dense,
-                )
-            )
+
+        candidates = list(merged.values())
         candidates.sort(key=lambda item: item.score_total, reverse=True)
         return candidates
+
+    def _build_candidate(
+        self,
+        chunk: Chunk,
+        document: Document,
+        source: Source,
+        score_lexical: float,
+        query_embedding: list[float],
+    ) -> Candidate:
+        chunk_embedding = (
+            list(chunk.embedding)
+            if chunk.embedding is not None
+            else embed_text(chunk.text, self.settings)
+        )
+        score_dense = cosine_similarity(query_embedding, chunk_embedding)
+        score_authority = 1.0 if chunk.authority in {"repo", "official"} else 0.5
+        score_freshness = 1.0 if source.updated_at_source else 0.6
+        return Candidate(
+            chunk=chunk,
+            document=document,
+            source=source,
+            score_lexical=score_lexical,
+            score_dense=score_dense,
+            score_authority=score_authority,
+            score_freshness=score_freshness,
+            score_total=self._score_candidate(
+                score_lexical=score_lexical,
+                score_dense=score_dense,
+                score_authority=score_authority,
+                score_freshness=score_freshness,
+            ),
+        )
+
+    def _score_candidate(
+        self,
+        score_lexical: float,
+        score_dense: float,
+        score_authority: float,
+        score_freshness: float,
+    ) -> float:
+        return (
+            (score_lexical * 0.6)
+            + (score_dense * 0.25)
+            + (score_authority * 0.1)
+            + (score_freshness * 0.05)
+        )
 
     def _rerank_candidates(
         self,
