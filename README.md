@@ -34,6 +34,7 @@ rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r
 rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --json-only
 rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --table-only
 rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --best-only
+rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --failures-only
 ```
 
 `vendor discover` performs controlled multi-page vendor docs discovery using the configured official-domain whitelist, inferred doc types, URL-prefix filtering, and bounded page counts.
