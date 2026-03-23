@@ -70,6 +70,27 @@ def _render_eval_matrix_table(result: dict) -> str | None:
     return "\n".join(lines)
 
 
+def _render_eval_matrix_best(result: dict) -> str | None:
+    if result.get("mode") != "matrix":
+        return None
+    best_run = result.get("best_run") or {}
+    candidate_profile = best_run.get("candidate_profile")
+    rerank_profile = best_run.get("rerank_profile")
+    if not candidate_profile or not rerank_profile:
+        return None
+    summary = best_run.get("summary", {})
+    lines = [
+        "Best Matrix Profile",
+        f"candidate: {candidate_profile}",
+        f"rerank: {rerank_profile}",
+        f"overall: {float(summary.get('overall_score', 0.0)):.3f}",
+        f"retrieval: {float(summary.get('retrieval_score', 0.0)):.3f}",
+        f"evidence: {float(summary.get('evidence_contract_score', 0.0)):.3f}",
+        f"failed: {int(summary.get('failed_case_count', 0))}",
+    ]
+    return "\n".join(lines)
+
+
 def _parse_flag_value(args: list[str], flag: str) -> str | None:
     if flag not in args:
         return None
@@ -160,6 +181,7 @@ def main() -> None:
         candidate_profiles = _parse_csv_flag(args[1:], "--candidate-profiles")
         rerank_profiles = _parse_csv_flag(args[1:], "--rerank-profiles")
         json_only = _has_flag(args[1:], "--json-only")
+        best_only = _has_flag(args[1:], "--best-only")
         table_only = _has_flag(args[1:], "--table-only")
         with get_db_session() as session:
             runner = EvalRunnerService(session)
@@ -179,6 +201,10 @@ def main() -> None:
                     baseline_dataset_name=baseline_dataset_name,
                 )
         matrix_table = _render_eval_matrix_table(result)
+        best_summary = _render_eval_matrix_best(result)
+        if best_summary and not json_only and best_only:
+            print(best_summary)
+            return
         if matrix_table and not json_only:
             print(matrix_table)
         if not table_only or matrix_table is None:
