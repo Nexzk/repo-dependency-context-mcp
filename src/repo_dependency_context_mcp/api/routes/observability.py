@@ -9,6 +9,7 @@ from repo_dependency_context_mcp.api.deps import get_db_session
 from repo_dependency_context_mcp.db.models import (
     EvalCase,
     EvalCaseResult,
+    EvalDataset,
     EvalRun,
     IngestJob,
     QueryLog,
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/api/observability", tags=["observability"])
 
 
 @router.get("/metrics")
-def metrics() -> dict:
+def metrics(baseline_dataset_name: str | None = None) -> dict:
     with get_db_session() as session:
         sync_state = SyncStateService(session)
         latest_eval_runs = list_latest_eval_runs(session, limit=5)
@@ -34,6 +35,11 @@ def metrics() -> dict:
         recent_eval_score_trend = build_recent_eval_score_trend(latest_eval_runs)
         recent_eval_score_summary = summarize_recent_eval_scores(latest_eval_runs)
         latest_eval_comparison = build_latest_eval_comparison(latest_eval_runs)
+        selected_eval_comparison = build_selected_eval_comparison(
+            session=session,
+            latest_runs=latest_eval_runs,
+            baseline_dataset_name=baseline_dataset_name,
+        )
         return {
             "ingest_jobs": session.scalar(select(func.count()).select_from(IngestJob)) or 0,
             "query_logs": session.scalar(select(func.count()).select_from(QueryLog)) or 0,
@@ -51,6 +57,7 @@ def metrics() -> dict:
             "recent_eval_score_trend": recent_eval_score_trend,
             "recent_eval_score_summary": recent_eval_score_summary,
             "latest_eval_comparison": latest_eval_comparison,
+            "selected_eval_comparison": selected_eval_comparison,
             "latest_sync_runs": [
                 {
                     "source_kind": run.source_kind,
@@ -172,36 +179,71 @@ def build_latest_eval_comparison(runs: list[EvalRun]) -> dict | None:
     if len(runs) < 2:
         return None
 
-    current = runs[0]
-    previous = runs[1]
+    return build_eval_comparison(current=runs[0], baseline=runs[1], baseline_source="latest")
+
+
+def build_selected_eval_comparison(
+    session,
+    latest_runs: list[EvalRun],
+    baseline_dataset_name: str | None,
+) -> dict | None:
+    if not latest_runs:
+        return None
+    if not baseline_dataset_name:
+        return build_latest_eval_comparison(latest_runs)
+
+    baseline_run = session.scalar(
+        select(EvalRun)
+        .join(EvalDataset, EvalDataset.id == EvalRun.dataset_id)
+        .where(EvalDataset.name == baseline_dataset_name)
+        .order_by(desc(EvalRun.created_at))
+        .limit(1)
+    )
+    if baseline_run is None:
+        return None
+
+    current = latest_runs[0]
+    return build_eval_comparison(
+        current=current,
+        baseline=baseline_run,
+        baseline_source=baseline_dataset_name,
+    )
+
+
+def build_eval_comparison(
+    current: EvalRun,
+    baseline: EvalRun,
+    baseline_source: str,
+) -> dict:
     current_summary = current.summary_json
-    previous_summary = previous.summary_json
+    baseline_summary = baseline.summary_json
 
     return {
+        "baseline_source": baseline_source,
         "current_dataset_id": str(current.dataset_id),
-        "previous_dataset_id": str(previous.dataset_id),
+        "previous_dataset_id": str(baseline.dataset_id),
         "current_overall_score": float(current_summary.get("overall_score", 0.0)),
-        "previous_overall_score": float(previous_summary.get("overall_score", 0.0)),
+        "previous_overall_score": float(baseline_summary.get("overall_score", 0.0)),
         "delta_overall_score": float(current_summary.get("overall_score", 0.0))
-        - float(previous_summary.get("overall_score", 0.0)),
+        - float(baseline_summary.get("overall_score", 0.0)),
         "current_retrieval_score": float(current_summary.get("retrieval_score", 0.0)),
-        "previous_retrieval_score": float(previous_summary.get("retrieval_score", 0.0)),
+        "previous_retrieval_score": float(baseline_summary.get("retrieval_score", 0.0)),
         "delta_retrieval_score": float(current_summary.get("retrieval_score", 0.0))
-        - float(previous_summary.get("retrieval_score", 0.0)),
+        - float(baseline_summary.get("retrieval_score", 0.0)),
         "current_evidence_contract_score": float(
             current_summary.get("evidence_contract_score", 0.0)
         ),
         "previous_evidence_contract_score": float(
-            previous_summary.get("evidence_contract_score", 0.0)
+            baseline_summary.get("evidence_contract_score", 0.0)
         ),
         "delta_evidence_contract_score": float(
             current_summary.get("evidence_contract_score", 0.0)
         )
-        - float(previous_summary.get("evidence_contract_score", 0.0)),
+        - float(baseline_summary.get("evidence_contract_score", 0.0)),
         "current_failed_case_count": int(current_summary.get("failed_case_count", 0)),
-        "previous_failed_case_count": int(previous_summary.get("failed_case_count", 0)),
+        "previous_failed_case_count": int(baseline_summary.get("failed_case_count", 0)),
         "delta_failed_case_count": int(current_summary.get("failed_case_count", 0))
-        - int(previous_summary.get("failed_case_count", 0)),
+        - int(baseline_summary.get("failed_case_count", 0)),
         "current_failing_checks": current_summary.get("failing_checks", {}),
-        "previous_failing_checks": previous_summary.get("failing_checks", {}),
+        "previous_failing_checks": baseline_summary.get("failing_checks", {}),
     }
