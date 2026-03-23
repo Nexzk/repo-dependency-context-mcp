@@ -486,3 +486,143 @@ def test_eval_run_cli_supports_failures_only_for_matrix(
     assert "failed: 0" in captured.out
     assert "Eval Matrix Results" not in captured.out
     assert "'mode': 'matrix'" not in captured.out
+
+
+def test_eval_run_cli_renders_baseline_deltas_for_matrix(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    dataset_path = tmp_path / "eval_delta.yaml"
+    dataset_path.write_text("name: demo\ncases: []\n", encoding="utf-8")
+
+    @contextmanager
+    def fake_db_session():
+        yield object()
+
+    class FakeRunner:
+        def __init__(self, session) -> None:
+            self.tool_service = type(
+                "ToolService",
+                (),
+                {
+                    "search_service": type(
+                        "SearchService",
+                        (),
+                        {
+                            "settings": type(
+                                "SettingsStub",
+                                (),
+                                {
+                                    "retrieval_candidate_profile": "hybrid_dual_route_v1",
+                                    "retrieval_rerank_profile": "local_task_aware_v2",
+                                },
+                            )()
+                        },
+                    )()
+                },
+            )()
+
+        def run_profile_matrix(
+            self,
+            dataset_path: Path,
+            candidate_profiles: list[str],
+            rerank_profiles: list[str],
+            baseline_dataset_name: str | None = None,
+        ) -> dict:
+            return {
+                "mode": "matrix",
+                "comparison_table": [
+                    {
+                        "candidate_profile": "hybrid_dual_route_v1",
+                        "rerank_profile": "local_task_aware_v2",
+                        "overall_score": 0.70,
+                        "retrieval_score": 0.75,
+                        "evidence_contract_score": 0.65,
+                        "failed_case_count": 1,
+                        "baseline_source": "demo-baseline",
+                        "delta_overall_score": -0.10,
+                        "delta_retrieval_score": -0.05,
+                        "delta_evidence_contract_score": -0.15,
+                        "delta_failed_case_count": 1,
+                    },
+                    {
+                        "candidate_profile": "hybrid_dual_route_dense_boost_v1",
+                        "rerank_profile": "local_task_aware_v2",
+                        "overall_score": 0.90,
+                        "retrieval_score": 0.95,
+                        "evidence_contract_score": 0.85,
+                        "failed_case_count": 0,
+                        "baseline_source": "demo-baseline",
+                        "delta_overall_score": 0.10,
+                        "delta_retrieval_score": 0.15,
+                        "delta_evidence_contract_score": 0.05,
+                        "delta_failed_case_count": -1,
+                    },
+                ],
+                "best_run": {
+                    "candidate_profile": "hybrid_dual_route_dense_boost_v1",
+                    "rerank_profile": "local_task_aware_v2",
+                    "summary": {
+                        "overall_score": 0.90,
+                        "retrieval_score": 0.95,
+                        "evidence_contract_score": 0.85,
+                        "failed_case_count": 0,
+                        "selected_eval_comparison": {
+                            "baseline_source": "demo-baseline",
+                            "delta_overall_score": 0.10,
+                            "delta_retrieval_score": 0.15,
+                            "delta_evidence_contract_score": 0.05,
+                            "delta_failed_case_count": -1,
+                        },
+                    },
+                },
+            }
+
+    monkeypatch.setattr(cli_main, "get_db_session", fake_db_session)
+    monkeypatch.setattr(cli_main, "EvalRunnerService", FakeRunner)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rdcmcp",
+            "eval",
+            "run",
+            str(dataset_path),
+            "--candidate-profiles",
+            "hybrid_dual_route_v1,hybrid_dual_route_dense_boost_v1",
+            "--rerank-profiles",
+            "local_task_aware_v2",
+            "--best-only",
+        ],
+    )
+
+    cli_main.main()
+
+    captured = capsys.readouterr()
+    assert "delta_overall: +0.100" in captured.out
+    assert "delta_retrieval: +0.150" in captured.out
+    assert "delta_failed: -1" in captured.out
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rdcmcp",
+            "eval",
+            "run",
+            str(dataset_path),
+            "--candidate-profiles",
+            "hybrid_dual_route_v1,hybrid_dual_route_dense_boost_v1",
+            "--rerank-profiles",
+            "local_task_aware_v2",
+            "--table-only",
+        ],
+    )
+
+    cli_main.main()
+
+    captured = capsys.readouterr()
+    assert "d_overall" in captured.out
+    assert "+0.100" in captured.out
+    assert "-1" in captured.out

@@ -36,6 +36,9 @@ def _render_eval_matrix_table(result: dict) -> str | None:
         "evidence",
         "failed",
     ]
+    include_delta = any("delta_overall_score" in row for row in comparison_table)
+    if include_delta:
+        headers.extend(["d_overall", "d_retrieval", "d_evidence", "d_failed"])
     rows: list[list[str]] = []
     for row in comparison_table:
         is_best = (
@@ -53,6 +56,15 @@ def _render_eval_matrix_table(result: dict) -> str | None:
                 str(int(row.get("failed_case_count", 0))),
             ]
         )
+        if include_delta:
+            rows[-1].extend(
+                [
+                    f"{float(row.get('delta_overall_score', 0.0)):+.3f}",
+                    f"{float(row.get('delta_retrieval_score', 0.0)):+.3f}",
+                    f"{float(row.get('delta_evidence_contract_score', 0.0)):+.3f}",
+                    f"{int(row.get('delta_failed_case_count', 0)):+d}",
+                ]
+            )
 
     widths = [
         max(len(headers[index]), *(len(row[index]) for row in rows))
@@ -88,6 +100,18 @@ def _render_eval_matrix_best(result: dict) -> str | None:
         f"evidence: {float(summary.get('evidence_contract_score', 0.0)):.3f}",
         f"failed: {int(summary.get('failed_case_count', 0))}",
     ]
+    comparison = summary.get("selected_eval_comparison")
+    if comparison is not None:
+        lines.extend(
+            [
+                f"baseline: {comparison.get('baseline_source')}",
+                f"delta_overall: {float(comparison.get('delta_overall_score', 0.0)):+.3f}",
+                f"delta_retrieval: {float(comparison.get('delta_retrieval_score', 0.0)):+.3f}",
+                "delta_evidence: "
+                f"{float(comparison.get('delta_evidence_contract_score', 0.0)):+.3f}",
+                f"delta_failed: {int(comparison.get('delta_failed_case_count', 0)):+d}",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -115,6 +139,19 @@ def _render_eval_matrix_failures_only(result: dict) -> str | None:
         f"evidence: {float(best_failure_row.get('evidence_contract_score', 0.0)):.3f}",
         f"failed: {int(best_failure_row.get('failed_case_count', 0))}",
     ]
+    if "baseline_source" in best_failure_row:
+        lines.extend(
+            [
+                f"baseline: {best_failure_row.get('baseline_source')}",
+                "delta_overall: "
+                f"{float(best_failure_row.get('delta_overall_score', 0.0)):+.3f}",
+                "delta_retrieval: "
+                f"{float(best_failure_row.get('delta_retrieval_score', 0.0)):+.3f}",
+                "delta_evidence: "
+                f"{float(best_failure_row.get('delta_evidence_contract_score', 0.0)):+.3f}",
+                f"delta_failed: {int(best_failure_row.get('delta_failed_case_count', 0)):+d}",
+            ]
+        )
     return "\n".join(lines)
 
 
