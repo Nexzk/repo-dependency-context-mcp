@@ -1797,3 +1797,75 @@ D. 第一阶段的代码骨架
 2. 写成 `issues backlog / sprint board`，拆成更细的任务卡片
 
 在当前阶段，不要再扩功能边界，先把闭环做出来。
+
+---
+
+## 33. 当前实现状态校准（2026-03-23）
+
+下面这部分用于说明：当前代码主线已经超过本 PRD 最初定义的 MVP 截止线。
+
+### 33.1 已完成且稳定落地的能力
+- repo code / repo docs ingest
+- PR / issue / commit metadata ingest
+- dependency parser + official vendor docs whitelist ingest
+- hybrid retrieval + rerank + evidence packing
+- 4 个 MCP tools
+- offline eval runner
+- internal playground + observability
+- CLI / task / API 三条 eval 执行入口
+
+### 33.2 已超出最初 MVP 的扩展项
+- durable sync state：
+  - `sync_runs`
+  - `sync_cursors`
+- retrieval experimentation：
+  - candidate profiles
+  - rerank profiles
+  - dual-route candidate generation
+- eval experimentation：
+  - baseline comparison
+  - profile matrix execution
+  - per-case diagnostics
+  - latest / baseline / matrix comparison views
+- CLI experiment output modes：
+  - `--json-only`
+  - `--table-only`
+  - `--best-only`
+  - `--failures-only`
+
+### 33.3 与 PRD 仍有差距的项
+- `feedback ingest` 仍未落地
+- `related changes` 仍是增强版 MVP 匹配，不是完整 change graph
+- dependency docs 仍是 bounded discovery / sync，不是 crawler-level 全站抓取
+- 生产级 OpenTelemetry / tracing 仍偏轻量实现
+- 文档中列出的部分上线指标尚未被系统化 gate：
+  - `Recall@10 >= 0.90`
+  - `P95 latency < 3s`
+
+### 33.4 当前阶段建议重新命名
+当前项目状态更适合归类为：
+
+`Phase 4: Retrieval Experimentation and Eval-Driven Tuning`
+
+也就是说，当前工作的主要目标已经不是“把 MVP 主链做出来”，而是：
+- 通过 eval/baseline/matrix 闭环持续比较检索策略
+- 让 retrieval profile 的实验结果可记录、可比较、可解释
+
+### 33.5 下一阶段边界建议
+如果继续沿当前路线推进，建议优先做：
+
+1. `related changes` 深化
+- file / symbol / PR / issue / commit 的图式关联
+- 减少当前基于规则匹配的脆弱性
+
+2. dependency docs 深化
+- 更强的增量同步策略
+- 更好的 release notes / migration sections 结构化抽取
+
+3. eval dataset 深化
+- 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases
+- 用更丰富的 case family 驱动 retrieval 调优
+
+4. online feedback
+- 落地反馈采集
+- 把线上失败案例稳定回灌到 eval datasets
