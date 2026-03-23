@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from repo_dependency_context_mcp.api.deps import get_db_session
 from repo_dependency_context_mcp.api.routes.observability import (
+    build_latest_eval_comparison,
     list_latest_eval_failures,
     list_latest_eval_runs,
 )
@@ -17,6 +18,8 @@ def playground() -> str:
     with get_db_session() as session:
         latest_runs = list_latest_eval_runs(session, limit=1)
         latest_failures = list_latest_eval_failures(session)
+        comparison_runs = list_latest_eval_runs(session, limit=2)
+        latest_eval_comparison = build_latest_eval_comparison(comparison_runs)
 
     latest_eval_html = "<p>No eval runs yet.</p>"
     if latest_runs:
@@ -51,6 +54,18 @@ def playground() -> str:
         <ul>
           {''.join(failure_items)}
         </ul>
+      </div>
+"""
+        if latest_eval_comparison:
+            evidence_delta = latest_eval_comparison["delta_evidence_contract_score"]
+            failed_case_delta = latest_eval_comparison["delta_failed_case_count"]
+            latest_eval_html += f"""
+      <div class="section">
+        <h2>Latest Eval Comparison</h2>
+        <p><strong>Overall delta:</strong> {latest_eval_comparison["delta_overall_score"]}</p>
+        <p><strong>Retrieval delta:</strong> {latest_eval_comparison["delta_retrieval_score"]}</p>
+        <p><strong>Evidence delta:</strong> {evidence_delta}</p>
+        <p><strong>Failed-case delta:</strong> {failed_case_delta}</p>
       </div>
 """
 
