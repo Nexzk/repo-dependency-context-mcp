@@ -277,24 +277,10 @@ class EvalRunnerService:
             self.tool_service.search_service.settings = original_settings
 
         comparison_table = [
-            {
-                "candidate_profile": run["candidate_profile"],
-                "rerank_profile": run["rerank_profile"],
-                "overall_score": run["summary"]["overall_score"],
-                "retrieval_score": run["summary"]["retrieval_score"],
-                "evidence_contract_score": run["summary"]["evidence_contract_score"],
-                "failed_case_count": run["summary"]["failed_case_count"],
-            }
+            self._build_matrix_comparison_row(run)
             for run in runs
         ]
-        best_run = max(
-            runs,
-            key=lambda run: (
-                run["summary"]["overall_score"],
-                run["summary"]["retrieval_score"],
-                -run["summary"]["failed_case_count"],
-            ),
-        ) if runs else None
+        best_run = self._select_best_matrix_run(runs, baseline_dataset_name)
 
         return {
             "mode": "matrix",
@@ -304,6 +290,67 @@ class EvalRunnerService:
             "comparison_table": comparison_table,
             "best_run": best_run,
         }
+
+    def _build_matrix_comparison_row(self, run: dict[str, Any]) -> dict[str, Any]:
+        row = {
+            "candidate_profile": run["candidate_profile"],
+            "rerank_profile": run["rerank_profile"],
+            "overall_score": run["summary"]["overall_score"],
+            "retrieval_score": run["summary"]["retrieval_score"],
+            "evidence_contract_score": run["summary"]["evidence_contract_score"],
+            "failed_case_count": run["summary"]["failed_case_count"],
+        }
+        comparison = run["summary"].get("selected_eval_comparison")
+        if comparison is not None:
+            row.update(
+                {
+                    "baseline_source": comparison["baseline_source"],
+                    "delta_overall_score": comparison["delta_overall_score"],
+                    "delta_retrieval_score": comparison["delta_retrieval_score"],
+                    "delta_evidence_contract_score": comparison[
+                        "delta_evidence_contract_score"
+                    ],
+                    "delta_failed_case_count": comparison["delta_failed_case_count"],
+                }
+            )
+        return row
+
+    def _select_best_matrix_run(
+        self,
+        runs: list[dict[str, Any]],
+        baseline_dataset_name: str | None,
+    ) -> dict[str, Any] | None:
+        if not runs:
+            return None
+        if baseline_dataset_name:
+            return max(
+                runs,
+                key=lambda run: (
+                    float(
+                        run["summary"]
+                        .get("selected_eval_comparison", {})
+                        .get("delta_overall_score", float("-inf"))
+                    ),
+                    float(
+                        run["summary"]
+                        .get("selected_eval_comparison", {})
+                        .get("delta_retrieval_score", float("-inf"))
+                    ),
+                    -int(
+                        run["summary"]
+                        .get("selected_eval_comparison", {})
+                        .get("delta_failed_case_count", 0)
+                    ),
+                ),
+            )
+        return max(
+            runs,
+            key=lambda run: (
+                run["summary"]["overall_score"],
+                run["summary"]["retrieval_score"],
+                -run["summary"]["failed_case_count"],
+            ),
+        )
 
     def _build_selected_eval_comparison(
         self,
