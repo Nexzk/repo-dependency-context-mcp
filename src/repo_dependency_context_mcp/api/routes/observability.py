@@ -92,6 +92,7 @@ def _serialize_eval_run(run: EvalRun) -> dict:
         "overall_score": run.summary_json.get("overall_score"),
         "failed_case_count": run.summary_json.get("failed_case_count", 0),
         "failing_checks": run.summary_json.get("failing_checks", {}),
+        "retrieval_profiles": run.summary_json.get("retrieval_profiles", {}),
     }
 
 
@@ -146,6 +147,7 @@ def build_recent_eval_score_trend(runs: list[EvalRun]) -> list[dict]:
                 run.summary_json.get("evidence_contract_score", 0.0)
             ),
             "failed_case_count": int(run.summary_json.get("failed_case_count", 0)),
+            "retrieval_profiles": run.summary_json.get("retrieval_profiles", {}),
         }
         for run in runs
     ]
@@ -246,4 +248,6 @@ def build_eval_comparison(
         - int(baseline_summary.get("failed_case_count", 0)),
         "current_failing_checks": current_summary.get("failing_checks", {}),
         "previous_failing_checks": baseline_summary.get("failing_checks", {}),
+        "current_retrieval_profiles": current_summary.get("retrieval_profiles", {}),
+        "previous_retrieval_profiles": baseline_summary.get("retrieval_profiles", {}),
     }

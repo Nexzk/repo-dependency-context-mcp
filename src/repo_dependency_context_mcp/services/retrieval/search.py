@@ -51,7 +51,12 @@ class SearchContextService:
             query_text=query,
             task_type=task_type,
             normalized_query=normalized_query,
-            filters={"repo_id": str(repo_id) if repo_id else None, "top_k": top_k},
+            filters={
+                "repo_id": str(repo_id) if repo_id else None,
+                "top_k": top_k,
+                "candidate_profile": self.settings.retrieval_candidate_profile,
+                "rerank_profile": self.settings.retrieval_rerank_profile,
+            },
         )
         self.session.add(query_log)
         self.session.flush()
