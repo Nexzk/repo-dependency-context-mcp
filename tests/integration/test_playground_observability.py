@@ -444,3 +444,103 @@ cases:
     assert playground.status_code == 200
     assert "Latest Eval Comparison" in playground.text
     assert "Overall delta" in playground.text
+
+
+def test_metrics_supports_dataset_baseline_comparison(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_baseline"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Obs Baseline", slug="tenant-obs-baseline")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-baseline",
+        provider="local",
+        external_id="sample-repo-baseline",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    baseline_dataset = tmp_path / "eval_baseline.yaml"
+    baseline_dataset.write_text(
+        f"""
+name: baseline-dataset
+description: baseline eval
+cases:
+  - id: locate_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+    EvalRunnerService(db_session).run_from_yaml(baseline_dataset)
+
+    current_dataset = tmp_path / "eval_current.yaml"
+    current_dataset.write_text(
+        f"""
+name: current-dataset
+description: current eval
+cases:
+  - id: missing_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/missing.py
+    expected_top_source: repo_code:src/missing.py
+""".strip(),
+        encoding="utf-8",
+    )
+    EvalRunnerService(db_session).run_from_yaml(current_dataset)
+
+    client = TestClient(app)
+    metrics = client.get(
+        "/api/observability/metrics",
+        params={"baseline_dataset_name": "baseline-dataset"},
+    )
+
+    assert metrics.status_code == 200
+    payload = metrics.json()
+    comparison = payload["selected_eval_comparison"]
+    assert comparison is not None
+    assert comparison["baseline_source"] == "baseline-dataset"
+    assert comparison["delta_overall_score"] < 0
+    assert comparison["delta_failed_case_count"] > 0
+
+    missing_baseline = client.get(
+        "/api/observability/metrics",
+        params={"baseline_dataset_name": "does-not-exist"},
+    )
+    assert missing_baseline.status_code == 200
+    assert missing_baseline.json()["selected_eval_comparison"] is None
