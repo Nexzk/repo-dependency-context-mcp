@@ -70,6 +70,15 @@ Use this checklist before handing the repository to another engineer or running 
 ## Eval
 
 - [ ] `rdcmcp eval run <dataset.yaml>` completes successfully
+- [ ] Baseline eval comparison works:
+  - [ ] `rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name>`
+- [ ] Matrix eval works:
+  - [ ] `rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2>`
+- [ ] Matrix output modes work as expected:
+  - [ ] `--json-only`
+  - [ ] `--table-only`
+  - [ ] `--best-only`
+  - [ ] `--failures-only`
 - [ ] Eval rows are written to `eval_runs` and `eval_case_results`
 - [ ] Demo eval can hit at least one required evidence source
 
@@ -89,6 +98,5 @@ Use this checklist before handing the repository to another engineer or running 
 ## Current Known Gaps
 
 - [ ] `get_related_changes` uses MVP-grade matching, not full graph/link analysis
-- [ ] Vendor doc fetcher is single-page fetch, not full site discovery
-- [ ] GitHub ingest is API normalization only, without incremental sync state
+- [ ] Vendor doc fetcher is bounded discovery/sync, not full crawler-level site ingestion
 - [ ] Dense retrieval and rerank support provider abstraction, but default local implementations are lightweight placeholders
