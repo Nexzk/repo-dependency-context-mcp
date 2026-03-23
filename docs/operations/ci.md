@@ -13,6 +13,8 @@ The repository includes a minimal GitHub Actions workflow at `.github/workflows/
 - runs `scripts/smoke.ps1`
 - runs `pytest`
 
+The current workflow validates the core eval path and live API smoke, but it does not separately exercise every manual matrix CLI presentation mode (`--json-only`, `--table-only`, `--best-only`, `--failures-only`). Those remain part of the local runbook and demo path.
+
 ## Current Scope
 
 The workflow intentionally mirrors the current local MVP verification path.
