@@ -150,9 +150,22 @@ def discover_vendor_docs_task(
 def run_eval_task(
     dataset_path: str,
     baseline_dataset_name: str | None = None,
+    candidate_profiles: list[str] | None = None,
+    rerank_profiles: list[str] | None = None,
 ) -> dict:
     with get_db_session() as session:
-        return EvalRunnerService(session).run_from_yaml(
+        runner = EvalRunnerService(session)
+        if candidate_profiles or rerank_profiles:
+            settings = runner.tool_service.search_service.settings
+            return runner.run_profile_matrix(
+                Path(dataset_path),
+                candidate_profiles=candidate_profiles
+                or [settings.retrieval_candidate_profile],
+                rerank_profiles=rerank_profiles
+                or [settings.retrieval_rerank_profile],
+                baseline_dataset_name=baseline_dataset_name,
+            )
+        return runner.run_from_yaml(
             Path(dataset_path),
             baseline_dataset_name=baseline_dataset_name,
         )

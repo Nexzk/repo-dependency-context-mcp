@@ -207,11 +207,26 @@ cases:
         assert eval_summary["case_count"] == 1
         assert eval_summary["selected_eval_comparison"]["baseline_source"] == "jobs-eval-baseline"
 
+        matrix_summary = run_eval_task.run(
+            str(dataset_path),
+            candidate_profiles=[
+                "hybrid_dual_route_v1",
+                "hybrid_dual_route_dense_boost_v1",
+            ],
+            rerank_profiles=["local_task_aware_v2"],
+            baseline_dataset_name="jobs-eval-baseline",
+        )
+        assert matrix_summary["mode"] == "matrix"
+        assert matrix_summary["run_count"] == 2
+        assert len(matrix_summary["runs"]) == 2
+        assert len(matrix_summary["comparison_table"]) == 2
+        assert matrix_summary["best_run"] is not None
+
         assert db_session.scalar(
             select(func.count()).select_from(Source).where(Source.source_type == "pr")
         ) == 1
         assert db_session.scalar(select(func.count()).select_from(DependencyDoc)) == 3
-        assert db_session.scalar(select(func.count()).select_from(EvalRun)) == 2
+        assert db_session.scalar(select(func.count()).select_from(EvalRun)) == 4
         assert db_session.scalar(
             select(func.count()).select_from(SyncRun).where(SyncRun.source_kind == "github_prs")
         ) == 1
