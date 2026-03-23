@@ -57,15 +57,19 @@ class EvalRunnerService:
         dataset_path: Path,
         baseline_dataset_name: str | None = None,
         dataset_name_override: str | None = None,
+        dataset_metadata_override: JSONDict | None = None,
     ) -> dict:
         payload = yaml.safe_load(dataset_path.read_text(encoding="utf-8"))
+        dataset_metadata: JSONDict = {
+            "source_path": str(dataset_path),
+            "base_dataset_name": payload["name"],
+        }
+        if dataset_metadata_override:
+            dataset_metadata.update(dataset_metadata_override)
         dataset = EvalDataset(
             name=dataset_name_override or payload["name"],
             description=payload.get("description"),
-            metadata_json={
-                "source_path": str(dataset_path),
-                "base_dataset_name": payload["name"],
-            },
+            metadata_json=dataset_metadata,
         )
         self.session.add(dataset)
         self.session.flush()
@@ -213,6 +217,8 @@ class EvalRunnerService:
                 ),
             },
         }
+        if dataset_metadata_override and "matrix" in dataset_metadata_override:
+            summary["matrix"] = dataset_metadata_override["matrix"]
         eval_run.status = "completed"
         eval_run.summary_json = summary
         self.session.commit()
@@ -233,6 +239,7 @@ class EvalRunnerService:
     ) -> dict:
         original_settings = self.tool_service.search_service.settings
         runs: list[dict[str, Any]] = []
+        batch_id = uuid.uuid4().hex
 
         try:
             for candidate_profile in candidate_profiles:
@@ -250,6 +257,14 @@ class EvalRunnerService:
                         dataset_path,
                         baseline_dataset_name=baseline_dataset_name,
                         dataset_name_override=dataset_name_override,
+                        dataset_metadata_override={
+                            "matrix": {
+                                "batch_id": batch_id,
+                                "base_dataset_name": Path(dataset_path).stem,
+                                "candidate_profile": candidate_profile,
+                                "rerank_profile": rerank_profile,
+                            }
+                        },
                     )
                     runs.append(
                         {
@@ -283,6 +298,7 @@ class EvalRunnerService:
 
         return {
             "mode": "matrix",
+            "batch_id": batch_id,
             "run_count": len(runs),
             "runs": runs,
             "comparison_table": comparison_table,

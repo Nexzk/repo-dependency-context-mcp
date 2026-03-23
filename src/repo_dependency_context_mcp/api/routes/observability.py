@@ -35,6 +35,9 @@ def metrics(baseline_dataset_name: str | None = None) -> dict:
         recent_eval_score_trend = build_recent_eval_score_trend(latest_eval_runs)
         recent_eval_score_summary = summarize_recent_eval_scores(latest_eval_runs)
         latest_eval_comparison = build_latest_eval_comparison(latest_eval_runs)
+        latest_eval_matrix_summary = build_latest_eval_matrix_summary(
+            list_latest_eval_runs(session, limit=20)
+        )
         selected_eval_comparison = build_selected_eval_comparison(
             session=session,
             latest_runs=latest_eval_runs,
@@ -57,6 +60,7 @@ def metrics(baseline_dataset_name: str | None = None) -> dict:
             "recent_eval_score_trend": recent_eval_score_trend,
             "recent_eval_score_summary": recent_eval_score_summary,
             "latest_eval_comparison": latest_eval_comparison,
+            "latest_eval_matrix_summary": latest_eval_matrix_summary,
             "selected_eval_comparison": selected_eval_comparison,
             "latest_sync_runs": [
                 {
@@ -182,6 +186,71 @@ def build_latest_eval_comparison(runs: list[EvalRun]) -> dict | None:
         return None
 
     return build_eval_comparison(current=runs[0], baseline=runs[1], baseline_source="latest")
+
+
+def build_latest_eval_matrix_summary(runs: list[EvalRun]) -> dict | None:
+    latest_batch_id: str | None = None
+    for run in runs:
+        matrix = run.summary_json.get("matrix", {})
+        batch_id = matrix.get("batch_id")
+        if isinstance(batch_id, str) and batch_id:
+            latest_batch_id = batch_id
+            break
+
+    if latest_batch_id is None:
+        return None
+
+    matrix_runs = [
+        run
+        for run in runs
+        if run.summary_json.get("matrix", {}).get("batch_id") == latest_batch_id
+    ]
+    if not matrix_runs:
+        return None
+
+    best_run = max(
+        matrix_runs,
+        key=lambda run: (
+            float(run.summary_json.get("overall_score", 0.0)),
+            float(run.summary_json.get("retrieval_score", 0.0)),
+            -int(run.summary_json.get("failed_case_count", 0)),
+        ),
+    )
+    first_matrix = matrix_runs[0].summary_json.get("matrix", {})
+    return {
+        "batch_id": latest_batch_id,
+        "run_count": len(matrix_runs),
+        "base_dataset_name": first_matrix.get("base_dataset_name"),
+        "best_run": {
+            "dataset_id": str(best_run.dataset_id),
+            "candidate_profile": best_run.summary_json.get("retrieval_profiles", {}).get(
+                "candidate_profile"
+            ),
+            "rerank_profile": best_run.summary_json.get("retrieval_profiles", {}).get(
+                "rerank_profile"
+            ),
+            "overall_score": float(best_run.summary_json.get("overall_score", 0.0)),
+            "retrieval_score": float(best_run.summary_json.get("retrieval_score", 0.0)),
+            "evidence_contract_score": float(
+                best_run.summary_json.get("evidence_contract_score", 0.0)
+            ),
+            "failed_case_count": int(best_run.summary_json.get("failed_case_count", 0)),
+        },
+        "runs": [
+            {
+                "dataset_id": str(run.dataset_id),
+                "candidate_profile": run.summary_json.get("retrieval_profiles", {}).get(
+                    "candidate_profile"
+                ),
+                "rerank_profile": run.summary_json.get("retrieval_profiles", {}).get(
+                    "rerank_profile"
+                ),
+                "overall_score": float(run.summary_json.get("overall_score", 0.0)),
+                "failed_case_count": int(run.summary_json.get("failed_case_count", 0)),
+            }
+            for run in matrix_runs
+        ],
+    }
 
 
 def build_selected_eval_comparison(
