@@ -91,6 +91,33 @@ def _render_eval_matrix_best(result: dict) -> str | None:
     return "\n".join(lines)
 
 
+def _render_eval_matrix_failures_only(result: dict) -> str | None:
+    if result.get("mode") != "matrix":
+        return None
+    comparison_table = result.get("comparison_table", [])
+    if not comparison_table:
+        return None
+
+    best_failure_row = min(
+        comparison_table,
+        key=lambda row: (
+            int(row.get("failed_case_count", 0)),
+            -float(row.get("overall_score", 0.0)),
+            -float(row.get("retrieval_score", 0.0)),
+        ),
+    )
+    lines = [
+        "Lowest Failure Profile",
+        f"candidate: {best_failure_row.get('candidate_profile')}",
+        f"rerank: {best_failure_row.get('rerank_profile')}",
+        f"overall: {float(best_failure_row.get('overall_score', 0.0)):.3f}",
+        f"retrieval: {float(best_failure_row.get('retrieval_score', 0.0)):.3f}",
+        f"evidence: {float(best_failure_row.get('evidence_contract_score', 0.0)):.3f}",
+        f"failed: {int(best_failure_row.get('failed_case_count', 0))}",
+    ]
+    return "\n".join(lines)
+
+
 def _parse_flag_value(args: list[str], flag: str) -> str | None:
     if flag not in args:
         return None
@@ -181,6 +208,7 @@ def main() -> None:
         candidate_profiles = _parse_csv_flag(args[1:], "--candidate-profiles")
         rerank_profiles = _parse_csv_flag(args[1:], "--rerank-profiles")
         json_only = _has_flag(args[1:], "--json-only")
+        failures_only = _has_flag(args[1:], "--failures-only")
         best_only = _has_flag(args[1:], "--best-only")
         table_only = _has_flag(args[1:], "--table-only")
         with get_db_session() as session:
@@ -202,6 +230,10 @@ def main() -> None:
                 )
         matrix_table = _render_eval_matrix_table(result)
         best_summary = _render_eval_matrix_best(result)
+        failure_summary = _render_eval_matrix_failures_only(result)
+        if failure_summary and not json_only and failures_only:
+            print(failure_summary)
+            return
         if best_summary and not json_only and best_only:
             print(best_summary)
             return
