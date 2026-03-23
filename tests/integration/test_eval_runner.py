@@ -361,6 +361,114 @@ cases:
     assert db_session.scalar(select(func.count()).select_from(EvalRun)) == 2
 
 
+def test_eval_runner_profile_matrix_includes_baseline_deltas(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_eval_matrix_baseline"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(
+        name="Tenant Eval Matrix Baseline",
+        slug="tenant-eval-matrix-baseline",
+    )
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-eval-matrix-baseline",
+        provider="local",
+        external_id="sample-repo-eval-matrix-baseline",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    baseline_dataset = tmp_path / "eval_matrix_baseline_base.yaml"
+    baseline_dataset.write_text(
+        f"""
+name: matrix-baseline-base
+description: baseline eval for matrix
+cases:
+  - id: locate_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+    EvalRunnerService(db_session).run_from_yaml(baseline_dataset)
+
+    current_dataset = tmp_path / "eval_matrix_baseline_current.yaml"
+    current_dataset.write_text(
+        f"""
+name: matrix-baseline-current
+description: current eval for matrix comparison
+cases:
+  - id: locate_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+
+    matrix_result = EvalRunnerService(db_session).run_profile_matrix(
+        current_dataset,
+        candidate_profiles=[
+            "hybrid_dual_route_v1",
+            "hybrid_dual_route_dense_boost_v1",
+        ],
+        rerank_profiles=["local_task_aware_v2"],
+        baseline_dataset_name="matrix-baseline-base",
+    )
+
+    assert matrix_result["mode"] == "matrix"
+    assert matrix_result["run_count"] == 2
+    assert len(matrix_result["comparison_table"]) == 2
+    for row in matrix_result["comparison_table"]:
+        assert row["baseline_source"] == "matrix-baseline-base"
+        assert "delta_overall_score" in row
+        assert "delta_retrieval_score" in row
+        assert "delta_evidence_contract_score" in row
+        assert "delta_failed_case_count" in row
+
+    best_run = matrix_result["best_run"]
+    assert best_run is not None
+    assert "selected_eval_comparison" in best_run["summary"]
+    assert (
+        best_run["summary"]["selected_eval_comparison"]["baseline_source"]
+        == "matrix-baseline-base"
+    )
+
+
 def test_eval_runner_scores_evidence_contract_fields(db_session, tmp_path: Path) -> None:
     repo_root = tmp_path / "sample_repo_contract"
     repo_root.mkdir()
