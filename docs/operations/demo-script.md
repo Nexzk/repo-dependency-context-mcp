@@ -92,7 +92,27 @@ Expected outcome:
 - Matrix output compares multiple candidate/rerank combinations
 - At least one row is marked as the best run
 
-## 8. Show MCP Server
+## 8. Show Baseline-Aware Matrix Delta
+
+```powershell
+rdcmcp eval run .\tests\fixtures\demo_eval.yaml `
+  --baseline-dataset-name demo_eval `
+  --candidate-profiles hybrid_dual_route_v1,hybrid_dual_route_dense_boost_v1 `
+  --rerank-profiles local_task_aware_v2,local_task_aware_authority_boost_v1 `
+  --best-only
+```
+
+Expected outcome:
+
+- Output identifies the current best profile relative to the selected baseline dataset
+- Output includes:
+  - `baseline`
+  - `delta_overall`
+  - `delta_retrieval`
+  - `delta_evidence`
+  - `delta_failed`
+
+## 9. Show MCP Server
 
 In another terminal:
 
@@ -105,7 +125,7 @@ Expected outcome:
 - Server starts without crashing
 - MCP client can discover the 4 registered tools
 
-## 9. Optional Smoke Script
+## 10. Optional Smoke Script
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\smoke.ps1
