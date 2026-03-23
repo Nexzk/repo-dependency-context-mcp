@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 from sqlalchemy import select
@@ -237,3 +238,112 @@ def test_search_context_adds_dense_only_candidates_to_hybrid_pool(
 
     evidence_paths = {item["path_or_url"] for item in response["evidence"]}
     assert "src/guards.py" in evidence_paths
+
+
+def test_dense_boost_candidate_profile_prefers_dense_only_candidates_in_scoring(
+    db_session,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "sample_repo_dense_profile"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "docs").mkdir()
+
+    (repo_root / "src" / "guards.py").write_text(
+        "\n".join(
+            [
+                "def guardian_check(user):",
+                "    if not user.get('elevated_access'):",
+                "        raise PermissionError('guardian sentinel only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    for index in range(18):
+        (repo_root / "docs" / f"guide_{index}.md").write_text(
+            "\n".join(
+                [
+                    "# Lookup Guide",
+                    "",
+                    " ".join(["Privilege gate semantic lookup implemented."] * 12),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_embed_text(text: str, settings=None) -> list[float]:
+        vector = [0.0] * 1536
+        normalized = text.lower()
+        if "where is privilege gate semantic lookup implemented" in normalized:
+            vector[0] = 1.0
+        elif "guardian sentinel" in normalized or "elevated_access" in normalized:
+            vector[0] = 1.0
+        elif "privilege gate semantic lookup" in normalized:
+            vector[1] = 1.0
+        return vector
+
+    monkeypatch.setattr(local_repo_module, "embed_text", fake_embed_text)
+    monkeypatch.setattr(search_module, "embed_text", fake_embed_text)
+    tenant = Tenant(name="Tenant Dense Profile", slug="tenant-dense-profile")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-dense-profile",
+        provider="local",
+        external_id="sample-repo-dense-profile",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    default_service = SearchContextService(db_session)
+    boosted_service = SearchContextService(db_session)
+    boosted_service.settings = replace(
+        default_service.settings,
+        retrieval_candidate_profile="hybrid_dual_route_dense_boost_v1",
+    )
+
+    default_dense_only_score = default_service._score_candidate(
+        score_lexical=0.0,
+        score_dense=1.0,
+        score_authority=1.0,
+        score_freshness=0.6,
+        profile=default_service.settings.retrieval_candidate_profile,
+    )
+    boosted_dense_only_score = boosted_service._score_candidate(
+        score_lexical=0.0,
+        score_dense=1.0,
+        score_authority=1.0,
+        score_freshness=0.6,
+        profile=boosted_service.settings.retrieval_candidate_profile,
+    )
+    default_lexical_heavy_score = default_service._score_candidate(
+        score_lexical=1.0,
+        score_dense=0.0,
+        score_authority=1.0,
+        score_freshness=0.6,
+        profile=default_service.settings.retrieval_candidate_profile,
+    )
+    boosted_lexical_heavy_score = boosted_service._score_candidate(
+        score_lexical=1.0,
+        score_dense=0.0,
+        score_authority=1.0,
+        score_freshness=0.6,
+        profile=boosted_service.settings.retrieval_candidate_profile,
+    )
+
+    assert boosted_dense_only_score > default_dense_only_score
+    assert default_lexical_heavy_score > boosted_lexical_heavy_score

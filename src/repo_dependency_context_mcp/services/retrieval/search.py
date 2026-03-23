@@ -122,6 +122,7 @@ class SearchContextService:
         normalized_query: str,
         limit: int,
     ) -> list[Candidate]:
+        profile = self.settings.retrieval_candidate_profile
         query_embedding = embed_text(normalized_query, self.settings)
         lexical_candidates = self._retrieve_lexical_candidates(
             tenant_id=tenant_id,
@@ -129,12 +130,14 @@ class SearchContextService:
             normalized_query=normalized_query,
             limit=limit,
             query_embedding=query_embedding,
+            profile=profile,
         )
         dense_candidates = self._retrieve_dense_candidates(
             tenant_id=tenant_id,
             repo_id=repo_id,
             limit=limit,
             query_embedding=query_embedding,
+            profile=profile,
         )
         return self._merge_candidates(lexical_candidates, dense_candidates)
 
@@ -145,6 +148,7 @@ class SearchContextService:
         normalized_query: str,
         limit: int,
         query_embedding: list[float],
+        profile: str,
     ) -> list[Candidate]:
         ts_query = func.plainto_tsquery("simple", normalized_query)
         lexical_stmt = (
@@ -188,6 +192,7 @@ class SearchContextService:
                     source=source,
                     score_lexical=float(score_lexical or 0.0),
                     query_embedding=query_embedding,
+                    profile=profile,
                 )
             )
         return candidates
@@ -198,6 +203,7 @@ class SearchContextService:
         repo_id: uuid.UUID | None,
         limit: int,
         query_embedding: list[float],
+        profile: str,
     ) -> list[Candidate]:
         dense_stmt = (
             select(Chunk, Document, Source)
@@ -214,11 +220,13 @@ class SearchContextService:
                 source=source,
                 score_lexical=0.0,
                 query_embedding=query_embedding,
+                profile=profile,
             )
             for chunk, document, source in dense_rows
         ]
         candidates.sort(key=lambda item: item.score_dense, reverse=True)
-        return candidates[: limit * 3]
+        dense_multiplier = 6 if profile == "hybrid_dual_route_dense_boost_v1" else 3
+        return candidates[: limit * dense_multiplier]
 
     def _merge_candidates(
         self,
@@ -226,6 +234,7 @@ class SearchContextService:
         dense_candidates: list[Candidate],
     ) -> list[Candidate]:
         merged: dict[uuid.UUID, Candidate] = {}
+        profile = self.settings.retrieval_candidate_profile
         for candidate in [*lexical_candidates, *dense_candidates]:
             current = merged.get(candidate.chunk.id)
             if current is None:
@@ -248,6 +257,7 @@ class SearchContextService:
                     score_dense=score_dense,
                     score_authority=score_authority,
                     score_freshness=score_freshness,
+                    profile=profile,
                 ),
             )
 
@@ -262,6 +272,7 @@ class SearchContextService:
         source: Source,
         score_lexical: float,
         query_embedding: list[float],
+        profile: str,
     ) -> Candidate:
         chunk_embedding = (
             list(chunk.embedding)
@@ -284,6 +295,7 @@ class SearchContextService:
                 score_dense=score_dense,
                 score_authority=score_authority,
                 score_freshness=score_freshness,
+                profile=profile,
             ),
         )
 
@@ -293,7 +305,15 @@ class SearchContextService:
         score_dense: float,
         score_authority: float,
         score_freshness: float,
+        profile: str,
     ) -> float:
+        if profile == "hybrid_dual_route_dense_boost_v1":
+            return (
+                (score_lexical * 0.15)
+                + (score_dense * 0.7)
+                + (score_authority * 0.1)
+                + (score_freshness * 0.05)
+            )
         return (
             (score_lexical * 0.6)
             + (score_dense * 0.25)
