@@ -124,7 +124,11 @@
 
 ### Phase 13：Dependency Docs 深化
 - [ ] 从 bounded discovery 向更强的增量同步策略推进
-- [ ] 提升 changelog / migration section 的结构化抽取
+- [~] 提升 changelog / migration section 的结构化抽取
+  - [x] 抽取 heading 结构
+  - [x] 抽取 version headings
+  - [x] 写入 `section_title` 与 `metadata_json.structure_kind`
+  - [ ] 仍未做 section-level persistence / multi-section indexing
 
 ### Phase 14：Eval Dataset 扩展
 - [ ] 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases

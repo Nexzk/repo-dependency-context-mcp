@@ -124,8 +124,11 @@ def test_vendor_doc_fetcher_fetches_whitelisted_html_and_persists(db_session) ->
         doc = db_session.scalar(select(DependencyDoc))
         assert doc is not None
         assert doc.title == "FastAPI Release Notes"
+        assert doc.section_title == "0.115"
         assert "Official migration details for FastAPI 0.115." in doc.raw_text
         assert doc.metadata_json["ingest_source"] == "vendor_docs_fetcher"
+        assert doc.metadata_json["version_headings"] == ["0.115"]
+        assert doc.metadata_json["structure_kind"] == "versioned_sections"
 
         cursor = db_session.scalar(
             select(SyncCursor).where(
@@ -183,6 +186,9 @@ def test_vendor_doc_fetcher_discovers_and_batches_multiple_whitelisted_pages(db_
             f"{base_url}/docs/release-notes",
         ]
         assert all(doc.metadata_json["ingest_source"] == "vendor_docs_discovery" for doc in docs)
+        assert docs[0].section_title == "FastAPI Migration Guide"
+        assert docs[0].metadata_json["structure_kind"] == "flat_sections"
+        assert docs[1].metadata_json["structure_kind"] == "flat_sections"
 
         accepted_again = service.discover_and_ingest(
             package_name="fastapi",

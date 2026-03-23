@@ -23,6 +23,7 @@ class VendorDocCandidate:
     section_title: str | None
     raw_text: str
     version_range: str | None
+    metadata_json: dict[str, object] | None = None
 
 
 @dataclass(slots=True)
@@ -80,9 +81,10 @@ class VendorDocIngestService:
                             authority="official",
                             url=request.url,
                             title=parser.title or request.url,
-                            section_title=parser.first_heading,
+                            section_title=_resolve_section_title(parser),
                             raw_text=parser.text_content(),
                             version_range=request.version_range,
+                            metadata_json=_doc_structure_metadata(parser),
                         )
                     )
 
@@ -176,9 +178,10 @@ class VendorDocIngestService:
                                 authority="official",
                                 url=page_url,
                                 title=page_title,
-                                section_title=section_title,
+                                section_title=_resolve_section_title(page_parser),
                                 raw_text=raw_text,
                                 version_range=request.version_range,
+                                metadata_json=_doc_structure_metadata(page_parser),
                             )
                         )
 
@@ -220,7 +223,11 @@ class VendorDocIngestService:
             existing = self.session.execute(
                 select(DependencyDoc).where(DependencyDoc.url == candidate.url)
             ).scalar_one_or_none()
-            metadata = {"ingest_source": ingest_source}
+            candidate_metadata = getattr(candidate, "metadata_json", None) or {}
+            metadata = {
+                "ingest_source": ingest_source,
+                **candidate_metadata,
+            }
             if existing is not None:
                 unchanged = (
                     existing.package_name == package_name
@@ -305,6 +312,8 @@ class _SimpleHtmlDocParser(HTMLParser):
         self._current_tag: str | None = None
         self._parts: list[str] = []
         self.links: list[str] = []
+        self.headings: list[dict[str, str]] = []
+        self.version_headings: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._current_tag = tag.lower()
@@ -324,6 +333,10 @@ class _SimpleHtmlDocParser(HTMLParser):
             self.title = text
         if self._current_tag in {"h1", "h2"} and self.first_heading is None:
             self.first_heading = text
+        if self._current_tag in {"h1", "h2", "h3"}:
+            self.headings.append({"level": self._current_tag, "text": text})
+            if _looks_like_version_heading(text):
+                self.version_headings.append(text)
         self._parts.append(text)
 
     def text_content(self) -> str:
@@ -345,6 +358,40 @@ def _infer_doc_type(
     if not include_doc_types:
         return default_doc_type
     return None
+
+
+def _looks_like_version_heading(text: str) -> bool:
+    normalized = text.strip().lower()
+    return bool(
+        normalized
+        and (
+            normalized.startswith("v")
+            and any(char.isdigit() for char in normalized[1:])
+            or re_search_version(normalized)
+        )
+    )
+
+
+def re_search_version(text: str) -> bool:
+    import re
+
+    return bool(re.search(r"\b\d+\.\d+(?:\.\d+)?\b", text))
+
+
+def _resolve_section_title(parser: _SimpleHtmlDocParser) -> str | None:
+    if parser.version_headings:
+        return parser.version_headings[0]
+    return parser.first_heading
+
+
+def _doc_structure_metadata(parser: _SimpleHtmlDocParser) -> dict[str, object]:
+    return {
+        "headings": parser.headings[:10],
+        "version_headings": parser.version_headings[:10],
+        "structure_kind": (
+            "versioned_sections" if parser.version_headings else "flat_sections"
+        ),
+    }
 
 
 def _global_tenant_id() -> uuid.UUID:

@@ -1865,6 +1865,9 @@ D. 第一阶段的代码骨架
 2. dependency docs 深化
 - 更强的增量同步策略
 - 更好的 release notes / migration sections 结构化抽取
+ - 当前已完成：
+   - heading / version heading extraction
+   - `section_title` and `structure_kind` persistence
 
 3. eval dataset 深化
 - 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases
