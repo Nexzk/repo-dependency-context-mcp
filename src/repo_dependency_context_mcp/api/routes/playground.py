@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse
 from repo_dependency_context_mcp.api.deps import get_db_session
 from repo_dependency_context_mcp.api.routes.observability import (
     build_latest_eval_comparison,
+    build_latest_eval_matrix_summary,
     list_latest_eval_failures,
     list_latest_eval_runs,
 )
@@ -18,8 +19,9 @@ def playground() -> str:
     with get_db_session() as session:
         latest_runs = list_latest_eval_runs(session, limit=1)
         latest_failures = list_latest_eval_failures(session)
-        comparison_runs = list_latest_eval_runs(session, limit=2)
+        comparison_runs = list_latest_eval_runs(session, limit=20)
         latest_eval_comparison = build_latest_eval_comparison(comparison_runs)
+        latest_eval_matrix_summary = build_latest_eval_matrix_summary(comparison_runs)
 
     latest_eval_html = "<p>No eval runs yet.</p>"
     if latest_runs:
@@ -66,6 +68,18 @@ def playground() -> str:
         <p><strong>Retrieval delta:</strong> {latest_eval_comparison["delta_retrieval_score"]}</p>
         <p><strong>Evidence delta:</strong> {evidence_delta}</p>
         <p><strong>Failed-case delta:</strong> {failed_case_delta}</p>
+      </div>
+"""
+        if latest_eval_matrix_summary:
+            best_run = latest_eval_matrix_summary["best_run"]
+            latest_eval_html += f"""
+      <div class="section">
+        <h2>Best Matrix Profile</h2>
+        <p><strong>Batch:</strong> <code>{latest_eval_matrix_summary["batch_id"]}</code></p>
+        <p><strong>Runs:</strong> {latest_eval_matrix_summary["run_count"]}</p>
+        <p><strong>Candidate profile:</strong> <code>{best_run["candidate_profile"]}</code></p>
+        <p><strong>Rerank profile:</strong> <code>{best_run["rerank_profile"]}</code></p>
+        <p><strong>Overall score:</strong> {best_run["overall_score"]}</p>
       </div>
 """
 
