@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from repo_dependency_context_mcp.db.models import (
     EvalCase,
@@ -278,6 +278,87 @@ cases:
     comparison = response.json()["selected_eval_comparison"]
     assert comparison["baseline_source"] == "api-baseline-dataset"
     assert comparison["delta_overall_score"] < 0
+
+
+def test_eval_api_supports_profile_matrix_runs(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_eval_matrix"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Eval Matrix", slug="tenant-eval-matrix")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-eval-matrix",
+        provider="local",
+        external_id="sample-repo-eval-matrix",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    dataset_path = tmp_path / "eval_matrix.yaml"
+    dataset_path.write_text(
+        f"""
+name: api-matrix-dataset
+description: eval matrix dataset
+cases:
+  - id: locate_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/eval/run",
+        json={
+            "dataset_path": str(dataset_path),
+            "candidate_profiles": [
+                "hybrid_dual_route_v1",
+                "hybrid_dual_route_dense_boost_v1",
+            ],
+            "rerank_profiles": ["local_task_aware_v2"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "matrix"
+    assert payload["run_count"] == 2
+    assert len(payload["runs"]) == 2
+    assert len(payload["comparison_table"]) == 2
+    assert payload["best_run"] is not None
+    assert db_session.scalar(select(func.count()).select_from(EvalRun)) == 2
 
 
 def test_eval_runner_scores_evidence_contract_fields(db_session, tmp_path: Path) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -56,12 +56,16 @@ class EvalRunnerService:
         self,
         dataset_path: Path,
         baseline_dataset_name: str | None = None,
+        dataset_name_override: str | None = None,
     ) -> dict:
         payload = yaml.safe_load(dataset_path.read_text(encoding="utf-8"))
         dataset = EvalDataset(
-            name=payload["name"],
+            name=dataset_name_override or payload["name"],
             description=payload.get("description"),
-            metadata_json={"source_path": str(dataset_path)},
+            metadata_json={
+                "source_path": str(dataset_path),
+                "base_dataset_name": payload["name"],
+            },
         )
         self.session.add(dataset)
         self.session.flush()
@@ -219,6 +223,71 @@ class EvalRunnerService:
         if selected_eval_comparison is not None:
             summary["selected_eval_comparison"] = selected_eval_comparison
         return summary
+
+    def run_profile_matrix(
+        self,
+        dataset_path: Path,
+        candidate_profiles: list[str],
+        rerank_profiles: list[str],
+        baseline_dataset_name: str | None = None,
+    ) -> dict:
+        original_settings = self.tool_service.search_service.settings
+        runs: list[dict[str, Any]] = []
+
+        try:
+            for candidate_profile in candidate_profiles:
+                for rerank_profile in rerank_profiles:
+                    self.tool_service.search_service.settings = replace(
+                        original_settings,
+                        retrieval_candidate_profile=candidate_profile,
+                        retrieval_rerank_profile=rerank_profile,
+                    )
+                    dataset_name_override = (
+                        f"{Path(dataset_path).stem}::"
+                        f"{candidate_profile}::{rerank_profile}::{uuid.uuid4().hex[:8]}"
+                    )
+                    summary = self.run_from_yaml(
+                        dataset_path,
+                        baseline_dataset_name=baseline_dataset_name,
+                        dataset_name_override=dataset_name_override,
+                    )
+                    runs.append(
+                        {
+                            "candidate_profile": candidate_profile,
+                            "rerank_profile": rerank_profile,
+                            "summary": summary,
+                        }
+                    )
+        finally:
+            self.tool_service.search_service.settings = original_settings
+
+        comparison_table = [
+            {
+                "candidate_profile": run["candidate_profile"],
+                "rerank_profile": run["rerank_profile"],
+                "overall_score": run["summary"]["overall_score"],
+                "retrieval_score": run["summary"]["retrieval_score"],
+                "evidence_contract_score": run["summary"]["evidence_contract_score"],
+                "failed_case_count": run["summary"]["failed_case_count"],
+            }
+            for run in runs
+        ]
+        best_run = max(
+            runs,
+            key=lambda run: (
+                run["summary"]["overall_score"],
+                run["summary"]["retrieval_score"],
+                -run["summary"]["failed_case_count"],
+            ),
+        ) if runs else None
+
+        return {
+            "mode": "matrix",
+            "run_count": len(runs),
+            "runs": runs,
+            "comparison_table": comparison_table,
+            "best_run": best_run,
+        }
 
     def _build_selected_eval_comparison(
         self,
