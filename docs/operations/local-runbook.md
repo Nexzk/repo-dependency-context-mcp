@@ -130,11 +130,29 @@ Notes:
 4. Run eval with `rdcmcp eval run <dataset.yaml>`
 5. For baseline comparison, use `rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name>`
 6. For profile-matrix experiments, use `rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2>`
-7. For machine-readable matrix output, use `--json-only`
-8. For tabular matrix output, use `--table-only`
-9. For the current best matrix profile, use `--best-only`
-10. For the lowest-failure matrix profile, use `--failures-only`
-11. Inspect `GET /api/observability/metrics`
+7. For baseline-aware matrix experiments, use `rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2>`
+8. For machine-readable matrix output, use `--json-only`
+9. For tabular matrix output, use `--table-only`
+10. For the current best matrix profile, use `--best-only`
+11. For the lowest-failure matrix profile, use `--failures-only`
+12. Inspect `GET /api/observability/metrics`
+
+Recommended comparison command:
+
+```powershell
+rdcmcp eval run .\tests\fixtures\demo_eval.yaml `
+  --baseline-dataset-name demo_eval `
+  --candidate-profiles hybrid_dual_route_v1,hybrid_dual_route_dense_boost_v1 `
+  --rerank-profiles local_task_aware_v2,local_task_aware_authority_boost_v1 `
+  --table-only
+```
+
+With `--baseline-dataset-name`, matrix output now includes per-profile delta fields against the selected baseline dataset:
+
+- `d_overall`
+- `d_retrieval`
+- `d_evidence`
+- `d_failed`
 
 For a structured demo path, see `docs/operations/demo-script.md`.
 For release validation, see `docs/operations/release-checklist.md`.

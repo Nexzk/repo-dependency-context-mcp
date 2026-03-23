@@ -31,6 +31,9 @@ rdcmcp vendor discover <package_name> <ecosystem> <index_url> <version_range>
 rdcmcp eval run <dataset.yaml>
 rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name>
 rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2>
+rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --table-only
+rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --best-only
+rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --failures-only
 rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --json-only
 rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --table-only
 rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --best-only
