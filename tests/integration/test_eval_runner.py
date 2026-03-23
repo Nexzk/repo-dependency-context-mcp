@@ -846,6 +846,20 @@ cases:
       - repo
     expected_why_selected_contains:
       - signal
+  - id: explain_admin_routes
+    query: explain require_admin for admin routes
+    task_type: explain
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_doc:docs/auth.md
+      - repo_code:src/auth.py
+    expected_authorities:
+      - repo
+    expected_freshness_contains:
+      - repository content
+    expected_why_selected_contains:
+      - signal
 """.strip(),
         encoding="utf-8",
     )
@@ -859,7 +873,7 @@ cases:
         for result in db_session.scalars(select(EvalCaseResult)).all()
     }
 
-    assert summary["case_count"] == 3
+    assert summary["case_count"] == 4
     assert summary["recall_at_5"] == 1.0
     assert summary["evidence_contract_score"] == 1.0
     assert summary["overall_score"] >= 0.95
@@ -883,6 +897,10 @@ cases:
     )
     assert (
         case_results["locate_auth"].result_payload["scores"]["top_source_ok"]
+        == 1.0
+    )
+    assert (
+        case_results["explain_admin_routes"].result_payload["scores"]["authority_match"]
         == 1.0
     )
     assert (

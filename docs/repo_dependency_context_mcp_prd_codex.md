@@ -1875,6 +1875,7 @@ D. 第一阶段的代码骨架
 - 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases
 - 用更丰富的 case family 驱动 retrieval 调优
  - 当前已完成：
+   - explain case family
    - debug case family
    - ACL isolation leakage tracking and dataset coverage
 

@@ -135,9 +135,10 @@
 
 ### Phase 14：Eval Dataset 扩展
 - [~] 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases
+  - [x] explain case family
   - [x] debug case family
   - [x] ACL isolation case family
-  - [ ] explain / ambiguity / stale-doc conflict 仍未补齐
+  - [ ] ambiguity / stale-doc conflict 仍未补齐
 - [ ] 扩大 demo dataset 的任务覆盖面
 
 ### Phase 15：Online Feedback
