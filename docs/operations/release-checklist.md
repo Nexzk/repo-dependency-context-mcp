@@ -74,6 +74,13 @@ Use this checklist before handing the repository to another engineer or running 
   - [ ] `rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name>`
 - [ ] Matrix eval works:
   - [ ] `rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2>`
+- [ ] Baseline-aware matrix eval works:
+  - [ ] `rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2> --table-only`
+  - [ ] Matrix output includes baseline delta columns:
+    - [ ] `d_overall`
+    - [ ] `d_retrieval`
+    - [ ] `d_evidence`
+    - [ ] `d_failed`
 - [ ] Matrix output modes work as expected:
   - [ ] `--json-only`
   - [ ] `--table-only`
