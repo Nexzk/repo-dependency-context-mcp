@@ -23,56 +23,65 @@ class RerankProvider:
         raise NotImplementedError
 
 
+@dataclass(slots=True)
 class LocalRerankProvider(RerankProvider):
+    profile: str = "local_task_aware_v2"
+
     def rerank(self, query: str, items: list[RerankItem]) -> list[RerankItem]:
+        return sorted(
+            items,
+            key=lambda item: self._score_item(query, item),
+            reverse=True,
+        )
+
+    def _score_item(self, query: str, item: RerankItem) -> float:
         tokens = _tokenize(query)
+        is_authority_boost_profile = (
+            self.profile == "local_task_aware_authority_boost_v1"
+        )
+        metadata = item.metadata or {}
+        item_text = item.text.lower()
+        overlap = sum(1 for token in tokens if token in item_text)
+        source_type = str(metadata.get("source_type", ""))
+        path_or_url = str(metadata.get("path_or_url", "")).lower()
+        symbol_path = str(metadata.get("symbol_path", "")).lower()
+        authority = str(metadata.get("authority", "")).lower()
+        task_type = str(metadata.get("task_type", "")).lower()
 
-        def score(item: RerankItem) -> float:
-            metadata = item.metadata or {}
-            item_text = item.text.lower()
-            overlap = sum(1 for token in tokens if token in item_text)
-            source_type = str(metadata.get("source_type", ""))
-            path_or_url = str(metadata.get("path_or_url", "")).lower()
-            symbol_path = str(metadata.get("symbol_path", "")).lower()
-            authority = str(metadata.get("authority", "")).lower()
-            task_type = str(metadata.get("task_type", "")).lower()
+        score_total = item.base_score + (overlap * 1.0)
 
-            score_total = item.base_score + (overlap * 1.0)
+        # Reward exact path mentions to stabilize file-targeting queries.
+        if path_or_url and path_or_url in query.lower():
+            score_total += 3.0
 
-            # Reward exact path mentions to stabilize file-targeting queries.
-            if path_or_url and path_or_url in query.lower():
-                score_total += 3.0
+        path_tokens = _tokenize(path_or_url)
+        symbol_tokens = _tokenize(symbol_path)
+        score_total += sum(0.6 for token in tokens if token in path_tokens)
+        score_total += sum(0.8 for token in tokens if token in symbol_tokens)
 
-            path_tokens = _tokenize(path_or_url)
-            symbol_tokens = _tokenize(symbol_path)
-            score_total += sum(0.6 for token in tokens if token in path_tokens)
-            score_total += sum(0.8 for token in tokens if token in symbol_tokens)
+        if authority == "official":
+            score_total += 0.8 if is_authority_boost_profile else 0.35
+        elif authority == "repo":
+            score_total += 0.2
 
-            if authority == "official":
-                score_total += 0.35
-            elif authority == "repo":
-                score_total += 0.2
+        if task_type == "locate":
+            if source_type == "repo_code":
+                score_total += 2.0
+            elif source_type == "repo_doc":
+                score_total += 1.0
+            elif source_type in {"pr", "commit", "issue"}:
+                score_total -= 0.25
+        elif task_type == "migration":
+            if source_type == "vendor_doc":
+                score_total += 2.75 if is_authority_boost_profile else 2.0
+            elif source_type == "dependency_manifest":
+                score_total += 0.75 if is_authority_boost_profile else 1.0
 
-            if task_type == "locate":
-                if source_type == "repo_code":
-                    score_total += 2.0
-                elif source_type == "repo_doc":
-                    score_total += 1.0
-                elif source_type in {"pr", "commit", "issue"}:
-                    score_total -= 0.25
-            elif task_type == "migration":
-                if source_type == "vendor_doc":
-                    score_total += 2.0
-                elif source_type == "dependency_manifest":
-                    score_total += 1.0
+        # Prefer direct source paths over longer less-specific items.
+        if path_or_url:
+            score_total += max(0.0, 0.3 - (len(path_or_url) * 0.002))
 
-            # Prefer direct source paths over longer less-specific items.
-            if path_or_url:
-                score_total += max(0.0, 0.3 - (len(path_or_url) * 0.002))
-
-            return score_total
-
-        return sorted(items, key=score, reverse=True)
+        return score_total
 
 
 @dataclass(slots=True)
@@ -129,7 +138,7 @@ def get_rerank_provider(settings: Settings | None = None) -> RerankProvider:
             api_key=active_settings.openai_api_key,
             model=active_settings.openai_rerank_model,
         )
-    return LocalRerankProvider()
+    return LocalRerankProvider(profile=active_settings.retrieval_rerank_profile)
 
 
 def _tokenize(value: str) -> set[str]:
