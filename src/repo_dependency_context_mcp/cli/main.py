@@ -17,6 +17,59 @@ from repo_dependency_context_mcp.services.ingest.github_metadata import GitHubMe
 from repo_dependency_context_mcp.services.mcp.server import build_mcp_server
 
 
+def _render_eval_matrix_table(result: dict) -> str | None:
+    if result.get("mode") != "matrix":
+        return None
+    comparison_table = result.get("comparison_table", [])
+    if not comparison_table:
+        return None
+
+    best_run = result.get("best_run") or {}
+    best_candidate = best_run.get("candidate_profile")
+    best_rerank = best_run.get("rerank_profile")
+    headers = [
+        "best",
+        "candidate",
+        "rerank",
+        "overall",
+        "retrieval",
+        "evidence",
+        "failed",
+    ]
+    rows: list[list[str]] = []
+    for row in comparison_table:
+        is_best = (
+            row.get("candidate_profile") == best_candidate
+            and row.get("rerank_profile") == best_rerank
+        )
+        rows.append(
+            [
+                "*" if is_best else "",
+                str(row.get("candidate_profile", "")),
+                str(row.get("rerank_profile", "")),
+                f"{float(row.get('overall_score', 0.0)):.3f}",
+                f"{float(row.get('retrieval_score', 0.0)):.3f}",
+                f"{float(row.get('evidence_contract_score', 0.0)):.3f}",
+                str(int(row.get("failed_case_count", 0))),
+            ]
+        )
+
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    ]
+
+    def format_row(values: list[str]) -> str:
+        return " | ".join(
+            value.ljust(widths[index]) for index, value in enumerate(values)
+        )
+
+    separator = "-+-".join("-" * width for width in widths)
+    lines = ["Eval Matrix Results", format_row(headers), separator]
+    lines.extend(format_row(row) for row in rows)
+    return "\n".join(lines)
+
+
 def _parse_flag_value(args: list[str], flag: str) -> str | None:
     if flag not in args:
         return None
@@ -119,6 +172,9 @@ def main() -> None:
                     dataset_path,
                     baseline_dataset_name=baseline_dataset_name,
                 )
+        matrix_table = _render_eval_matrix_table(result)
+        if matrix_table:
+            print(matrix_table)
         print(result)
         return
     print(f"{settings.app_name} [{settings.env}]")

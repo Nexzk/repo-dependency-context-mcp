@@ -52,7 +52,32 @@ def test_eval_run_cli_supports_profile_matrix(monkeypatch, capsys, tmp_path: Pat
             observed["candidate_profiles"] = candidate_profiles
             observed["rerank_profiles"] = rerank_profiles
             observed["baseline_dataset_name"] = baseline_dataset_name
-            return {"mode": "matrix", "run_count": 2}
+            return {
+                "mode": "matrix",
+                "run_count": 2,
+                "comparison_table": [
+                    {
+                        "candidate_profile": "hybrid_dual_route_v1",
+                        "rerank_profile": "local_task_aware_v2",
+                        "overall_score": 0.7,
+                        "retrieval_score": 0.8,
+                        "evidence_contract_score": 0.6,
+                        "failed_case_count": 1,
+                    },
+                    {
+                        "candidate_profile": "hybrid_dual_route_dense_boost_v1",
+                        "rerank_profile": "local_task_aware_v2",
+                        "overall_score": 0.9,
+                        "retrieval_score": 0.95,
+                        "evidence_contract_score": 0.85,
+                        "failed_case_count": 0,
+                    },
+                ],
+                "best_run": {
+                    "candidate_profile": "hybrid_dual_route_dense_boost_v1",
+                    "rerank_profile": "local_task_aware_v2",
+                },
+            }
 
     monkeypatch.setattr(cli_main, "get_db_session", fake_db_session)
     monkeypatch.setattr(cli_main, "EvalRunnerService", FakeRunner)
@@ -76,7 +101,10 @@ def test_eval_run_cli_supports_profile_matrix(monkeypatch, capsys, tmp_path: Pat
     cli_main.main()
 
     captured = capsys.readouterr()
-    assert "{'mode': 'matrix', 'run_count': 2}" in captured.out
+    assert "Eval Matrix Results" in captured.out
+    assert "hybrid_dual_route_dense_boost_v1" in captured.out
+    assert "*    | hybrid_dual_route_dense_boost_v1" in captured.out
+    assert "'mode': 'matrix'" in captured.out
     assert observed["dataset_path"] == dataset_path
     assert observed["candidate_profiles"] == [
         "hybrid_dual_route_v1",
