@@ -49,3 +49,18 @@ cases:
     expected_why_selected_contains:
       - signal
     requires_clarification: false
+  - id: debug_admin_permission_error
+    query: admin only permission error in require_admin
+    task_type: debug
+    tenant_id: __TENANT_ID__
+    repo_id: __REPO_ID__
+    must_hit_sources:
+      - repo_code:src/auth.py
+    expected_top_source: repo_code:src/auth.py
+    expected_authorities:
+      - repo
+    expected_freshness_contains:
+      - repository content
+    expected_why_selected_contains:
+      - signal
+    requires_clarification: false

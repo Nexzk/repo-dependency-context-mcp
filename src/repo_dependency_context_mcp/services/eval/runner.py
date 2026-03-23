@@ -170,7 +170,10 @@ class EvalRunnerService:
                     eval_case_id=eval_case.id,
                     recall_at_k=metrics.recall_at_5,
                     mrr=metrics.mrr,
-                    leakage_count=0,
+                    leakage_count=_leakage_count(
+                        evidence=response["evidence"],
+                        must_not_hit_sources=case_payload.get("must_not_hit_sources", []),
+                    ),
                     result_payload={
                         "evidence": response["evidence"],
                         "diagnostics": diagnostics,
@@ -678,3 +681,13 @@ def _top_source_ok(
     if not source_keys:
         return 0.0
     return 1.0 if source_keys[0] == expected_top_source else 0.0
+
+
+def _leakage_count(
+    evidence: list[dict],
+    must_not_hit_sources: list[str],
+) -> int:
+    if not must_not_hit_sources:
+        return 0
+    source_keys = [f"{item['source_type']}:{item['path_or_url']}" for item in evidence]
+    return sum(1 for source in must_not_hit_sources if source in source_keys)

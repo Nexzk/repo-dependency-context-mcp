@@ -1874,6 +1874,9 @@ D. 第一阶段的代码骨架
 3. eval dataset 深化
 - 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases
 - 用更丰富的 case family 驱动 retrieval 调优
+ - 当前已完成：
+   - debug case family
+   - ACL isolation leakage tracking and dataset coverage
 
 4. online feedback
 - 落地反馈采集

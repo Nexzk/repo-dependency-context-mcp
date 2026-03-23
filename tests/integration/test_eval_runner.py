@@ -891,6 +891,160 @@ cases:
     )
 
 
+def test_eval_runner_covers_debug_case_family(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_eval_debug"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Eval Debug", slug="tenant-eval-debug")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-eval-debug",
+        provider="local",
+        external_id="sample-repo-eval-debug",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    dataset_path = tmp_path / "eval_debug_family.yaml"
+    dataset_path.write_text(
+        f"""
+name: debug-family-eval
+description: covers debug-style query behavior
+cases:
+  - id: debug_admin_permission_error
+    query: admin only permission error in require_admin
+    task_type: debug
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+    expected_top_source: repo_code:src/auth.py
+    expected_authorities:
+      - repo
+    expected_freshness_contains:
+      - repository content
+    expected_why_selected_contains:
+      - signal
+""".strip(),
+        encoding="utf-8",
+    )
+
+    summary = EvalRunnerService(db_session).run_from_yaml(dataset_path)
+    case_result = db_session.scalar(select(EvalCaseResult))
+
+    assert summary["case_count"] == 1
+    assert summary["overall_score"] >= 0.95
+    assert case_result is not None
+    assert case_result.result_payload["scores"]["top_source_ok"] == 1.0
+    assert case_result.result_payload["scores"]["authority_match"] == 1.0
+
+
+def test_eval_runner_tracks_acl_isolation_leakage_count(
+    db_session,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    tenant = Tenant(name="Tenant Eval ACL", slug="tenant-eval-acl")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-eval-acl",
+        provider="local",
+        external_id="sample-repo-eval-acl",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    runner = EvalRunnerService(db_session)
+    monkeypatch.setattr(
+        runner.tool_service,
+        "search_context",
+        lambda tenant_id, repo_id, query, task_type, top_k: {
+            "evidence": [
+                {
+                    "source_type": "repo_code",
+                    "path_or_url": "src/auth.py",
+                    "authority": "repo",
+                    "freshness_reason": (
+                        "Freshness: repository content from latest local ingest snapshot"
+                    ),
+                    "why_selected": "Signal: lexical match",
+                },
+                {
+                    "source_type": "repo_code",
+                    "path_or_url": "src/secret_admin.py",
+                    "authority": "repo",
+                    "freshness_reason": (
+                        "Freshness: repository content from latest local ingest snapshot"
+                    ),
+                    "why_selected": "Signal: lexical match",
+                },
+            ],
+        },
+    )
+
+    dataset_path = tmp_path / "eval_acl_isolation.yaml"
+    dataset_path.write_text(
+        f"""
+name: acl-isolation-eval
+description: validates must-not-hit leakage tracking
+cases:
+  - id: acl_isolation_case
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+    must_not_hit_sources:
+      - repo_code:src/secret_admin.py
+""".strip(),
+        encoding="utf-8",
+    )
+
+    summary = runner.run_from_yaml(dataset_path)
+    case_result = db_session.scalar(select(EvalCaseResult))
+
+    assert summary["failed_case_count"] == 1
+    assert case_result is not None
+    assert case_result.leakage_count == 1
+    assert case_result.result_payload["scores"]["recall_at_5"] == 0.0
+    assert case_result.result_payload["diagnostics"]["failed_checks"][0]["check"] == (
+        "must_not_hit_sources"
+    )
+
+
 def test_eval_runner_scores_expected_top_source_constraint(
     db_session,
     tmp_path: Path,
