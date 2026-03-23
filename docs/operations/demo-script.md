@@ -72,7 +72,27 @@ Expected outcome:
 - Non-zero `query_logs`
 - Non-zero `eval_runs`
 
-## 7. Show MCP Server
+## 7. Show Eval Matrix
+
+```powershell
+rdcmcp eval run .\tests\fixtures\demo_eval.yaml `
+  --candidate-profiles hybrid_dual_route_v1,hybrid_dual_route_dense_boost_v1 `
+  --rerank-profiles local_task_aware_v2,local_task_aware_authority_boost_v1 `
+  --table-only
+```
+
+Optional variants:
+
+- `--json-only` for machine-readable output
+- `--best-only` for the current best profile
+- `--failures-only` for the lowest-failure profile
+
+Expected outcome:
+
+- Matrix output compares multiple candidate/rerank combinations
+- At least one row is marked as the best run
+
+## 8. Show MCP Server
 
 In another terminal:
 
@@ -85,7 +105,7 @@ Expected outcome:
 - Server starts without crashing
 - MCP client can discover the 4 registered tools
 
-## 8. Optional Smoke Script
+## 9. Optional Smoke Script
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\smoke.ps1
