@@ -16,6 +16,7 @@ from repo_dependency_context_mcp.db.models import (
     Tenant,
 )
 from repo_dependency_context_mcp.services.ingest.github_metadata import GitHubMetadataIngestService
+from repo_dependency_context_mcp.services.ingest.local_repo import LocalRepoIngestService
 
 
 class _GitHubHandler(BaseHTTPRequestHandler):
@@ -285,3 +286,99 @@ def test_github_metadata_ingest_failure_does_not_advance_cursor(db_session) -> N
         success_server.server_close()
         failing_server.shutdown()
         failing_server.server_close()
+
+
+class _BasenameGitHubHandler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        routes = {
+            "/repos/acme/sample/pulls": [
+                {
+                    "number": 101,
+                    "title": "Harden admin middleware",
+                    "body": "Updates require_admin in auth.py and related auth checks.",
+                    "user": {"login": "alice"},
+                    "labels": [{"name": "auth"}],
+                    "updated_at": "2026-03-20T12:00:00Z",
+                    "merged_at": "2026-03-20T00:00:00Z",
+                }
+            ],
+            "/repos/acme/sample/issues": [],
+            "/repos/acme/sample/commits": [],
+        }
+        payload = json.dumps(routes.get(self.path, [])).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format, *args):  # noqa: A003
+        return
+
+
+def test_github_metadata_ingest_canonicalizes_repo_file_references_from_basename(
+    db_session,
+    tmp_path,
+) -> None:
+    repo_root = tmp_path / "sample_repo"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    server = HTTPServer(("127.0.0.1", 0), _BasenameGitHubHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        tenant = Tenant(name="Tenant GitHub Canonical", slug="tenant-github-canonical")
+        db_session.add(tenant)
+        db_session.flush()
+
+        repo = Repo(
+            tenant_id=tenant.id,
+            name="sample-repo-canonical",
+            provider="github",
+            external_id="acme/sample-canonical",
+            default_branch="main",
+            acl_scope={"visibility": "private"},
+        )
+        db_session.add(repo)
+        db_session.commit()
+
+        LocalRepoIngestService(db_session).ingest_repo(
+            tenant_id=tenant.id,
+            repo_id=repo.id,
+            repo_path=repo_root,
+            acl_scope={"visibility": "private"},
+        )
+
+        ingested = GitHubMetadataIngestService(
+            db_session,
+            base_url=f"http://127.0.0.1:{server.server_port}",
+            token=None,
+        ).ingest_repo_changes(
+            tenant_id=tenant.id,
+            repo_id=repo.id,
+            owner="acme",
+            repo_name="sample",
+            acl_scope={"visibility": "private"},
+        )
+
+        assert ingested == 1
+
+        chunk = db_session.scalars(select(Chunk).where(Chunk.chunk_type == "pr_summary")).one()
+        assert chunk.metadata_json["related_file_paths"] == ["src/auth.py"]
+        assert chunk.metadata_json["related_symbols"] == ["require_admin"]
+    finally:
+        server.shutdown()
+        server.server_close()

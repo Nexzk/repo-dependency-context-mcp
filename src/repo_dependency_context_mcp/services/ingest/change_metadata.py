@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from repo_dependency_context_mcp.services.retrieval.embedding import embed_text
 class ChangeMetadataIngestService:
     def __init__(self, session: Session) -> None:
         self.session = session
+        self._reference_cache: dict[tuple[uuid.UUID, uuid.UUID], _RepoReferenceIndex] = {}
 
     def ingest_items(
         self,
@@ -33,6 +35,12 @@ class ChangeMetadataIngestService:
             body = item.get("body", "")
             raw_text = f"{title}\n\n{body}".strip()
             related_metadata = _normalize_related_metadata(item)
+            related_metadata = self._expand_related_metadata(
+                tenant_id=tenant_id,
+                repo_id=repo_id,
+                raw_text=raw_text,
+                related_metadata=related_metadata,
+            )
             metadata = {
                 "author": item.get("author"),
                 "labels": item.get("labels", []),
@@ -135,6 +143,80 @@ class ChangeMetadataIngestService:
             acl_scope=acl_scope,
         )
 
+    def _expand_related_metadata(
+        self,
+        tenant_id: uuid.UUID,
+        repo_id: uuid.UUID,
+        raw_text: str,
+        related_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        index = self._get_reference_index(tenant_id=tenant_id, repo_id=repo_id)
+        normalized_text = raw_text.replace("\\", "/").lower()
+        file_paths = set(str(value) for value in related_metadata.get("related_file_paths", []))
+        symbols = set(str(value) for value in related_metadata.get("related_symbols", []))
+
+        for file_path in list(file_paths):
+            canonical = index.canonical_path_for(file_path)
+            if canonical:
+                file_paths.add(canonical)
+
+        for basename, canonical in index.path_by_basename.items():
+            if re.search(
+                rf"(?<![A-Za-z0-9_/.-]){re.escape(basename)}(?![A-Za-z0-9_/.-])",
+                normalized_text,
+            ):
+                file_paths.add(canonical)
+
+        for symbol in index.symbols:
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])", normalized_text):
+                symbols.add(symbol)
+
+        normalized_file_paths = sorted(
+            {
+                index.canonical_path_for(value) or value.replace("\\", "/")
+                for value in file_paths
+            }
+        )
+        normalized_symbols = sorted({value.strip() for value in symbols if value.strip()})
+        return {
+            "related_paths": sorted(
+                set([*normalized_file_paths, *normalized_symbols])
+            ),
+            "related_file_paths": normalized_file_paths,
+            "related_symbols": normalized_symbols,
+        }
+
+    def _get_reference_index(
+        self,
+        tenant_id: uuid.UUID,
+        repo_id: uuid.UUID,
+    ) -> "_RepoReferenceIndex":
+        key = (tenant_id, repo_id)
+        cached = self._reference_cache.get(key)
+        if cached is not None:
+            return cached
+
+        path_rows = self.session.scalars(
+            select(Source.path_or_url)
+            .where(Source.tenant_id == tenant_id)
+            .where(Source.repo_id == repo_id)
+            .where(Source.source_type == "repo_code")
+        ).all()
+        symbol_rows = self.session.scalars(
+            select(Chunk.symbol_path)
+            .join(Source, Source.id == Chunk.source_id)
+            .where(Chunk.tenant_id == tenant_id)
+            .where(Chunk.repo_id == repo_id)
+            .where(Source.source_type == "repo_code")
+            .where(Chunk.symbol_path.is_not(None))
+        ).all()
+        index = _RepoReferenceIndex(
+            file_paths=[str(value) for value in path_rows],
+            symbols=[str(value) for value in symbol_rows],
+        )
+        self._reference_cache[key] = index
+        return index
+
     def _delete_source_documents(self, source_id: uuid.UUID) -> None:
         self.session.execute(delete(Document).where(Document.source_id == source_id))
 
@@ -202,3 +284,40 @@ def _normalize_source_refs(
     elif source_type == "issue":
         refs["source_issue_ref"] = refs["source_issue_ref"] or external_ref
     return refs
+
+
+class _RepoReferenceIndex:
+    def __init__(self, file_paths: list[str], symbols: list[str]) -> None:
+        normalized_paths = sorted(
+            {
+                value.replace("\\", "/").strip()
+                for value in file_paths
+                if value.strip()
+            }
+        )
+        self.file_paths = normalized_paths
+        basename_to_paths: dict[str, set[str]] = {}
+        for path in normalized_paths:
+            basename = Path(path).name.lower()
+            basename_to_paths.setdefault(basename, set()).add(path)
+        self.path_by_basename = {
+            basename: next(iter(paths))
+            for basename, paths in basename_to_paths.items()
+            if len(paths) == 1
+        }
+        self.path_lookup = {path.lower(): path for path in normalized_paths}
+        self.symbols = sorted(
+            {
+                value.strip()
+                for value in symbols
+                if value and value.strip()
+            }
+        )
+
+    def canonical_path_for(self, value: str) -> str | None:
+        normalized = value.replace("\\", "/").strip().lower()
+        if not normalized:
+            return None
+        if normalized in self.path_lookup:
+            return self.path_lookup[normalized]
+        return self.path_by_basename.get(Path(normalized).name)
