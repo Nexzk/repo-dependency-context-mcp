@@ -39,6 +39,17 @@ def test_mcp_tools_return_structured_results(db_session, tmp_path: Path) -> None
         ),
         encoding="utf-8",
     )
+    (repo_root / "docs" / "fastapi-upgrade-notes.md").write_text(
+        "\n".join(
+            [
+                "# FastAPI Upgrade Notes",
+                "",
+                "Internal migration note for FastAPI.",
+                "This older internal note still references pre-0.115 migration guidance.",
+            ]
+        ),
+        encoding="utf-8",
+    )
     (repo_root / "requirements.txt").write_text(
         "fastapi==0.115.0\n",
         encoding="utf-8",
@@ -126,7 +137,9 @@ def test_mcp_tools_return_structured_results(db_session, tmp_path: Path) -> None
         version_range="0.115.x",
         topic="migration",
     )
-    assert len(dependency_notes["evidence"]) == 2
+    assert len(dependency_notes["evidence"]) == 3
     assert dependency_notes["evidence"][0]["authority"] == "official"
-    assert dependency_notes["evidence"][1]["authority"] == "repo"
-    assert dependency_notes["evidence"][1]["path_or_url"] == "requirements.txt"
+    assert dependency_notes["evidence"][1]["source_type"] == "repo_doc"
+    assert dependency_notes["evidence"][1]["path_or_url"] == "docs/fastapi-upgrade-notes.md"
+    assert dependency_notes["evidence"][2]["authority"] == "repo"
+    assert dependency_notes["evidence"][2]["path_or_url"] == "requirements.txt"

@@ -138,7 +138,8 @@
   - [x] explain case family
   - [x] debug case family
   - [x] ACL isolation case family
-  - [ ] ambiguity / stale-doc conflict 仍未补齐
+  - [x] stale-doc conflict case family
+  - [ ] ambiguity 仍未补齐
 - [ ] 扩大 demo dataset 的任务覆盖面
 
 ### Phase 15：Online Feedback

@@ -711,6 +711,18 @@ def test_eval_runner_covers_repo_dependency_and_related_change_cases(
         ),
         encoding="utf-8",
     )
+    (repo_root / "docs" / "fastapi-upgrade-notes.md").write_text(
+        "\n".join(
+            [
+                "# FastAPI Upgrade Notes",
+                "",
+                "Internal migration note for FastAPI.",
+                "",
+                "This older internal note still references pre-0.115 migration guidance.",
+            ]
+        ),
+        encoding="utf-8",
+    )
     (repo_root / "requirements.txt").write_text(
         "fastapi==0.115.0\n",
         encoding="utf-8",
@@ -835,6 +847,28 @@ cases:
     must_rank_before:
       - higher: vendor_doc:https://fastapi.tiangolo.com/release-notes/
         lower: dependency_manifest:requirements.txt
+  - id: stale_fastapi_migration_note_conflict
+    tool: get_dependency_notes
+    query: compare stale internal fastapi migration note with official guidance
+    task_type: migration
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    package_name: fastapi
+    version_range: 0.115.x
+    topic: migration
+    must_hit_sources:
+      - vendor_doc:https://fastapi.tiangolo.com/release-notes/
+      - repo_doc:docs/fastapi-upgrade-notes.md
+    expected_top_source: vendor_doc:https://fastapi.tiangolo.com/release-notes/
+    expected_authorities:
+      - official
+      - repo
+    expected_freshness_contains:
+      - whitelisted domain
+      - internal repository note
+    must_rank_before:
+      - higher: vendor_doc:https://fastapi.tiangolo.com/release-notes/
+        lower: repo_doc:docs/fastapi-upgrade-notes.md
   - id: related_auth_changes
     query: harden admin middleware require_admin src/auth.py
     task_type: locate
@@ -873,7 +907,7 @@ cases:
         for result in db_session.scalars(select(EvalCaseResult)).all()
     }
 
-    assert summary["case_count"] == 4
+    assert summary["case_count"] == 5
     assert summary["recall_at_5"] == 1.0
     assert summary["evidence_contract_score"] == 1.0
     assert summary["overall_score"] >= 0.95
@@ -893,6 +927,18 @@ cases:
         case_results["dependency_fastapi_migration"].result_payload["scores"][
             "authority_match"
         ]
+        == 1.0
+    )
+    assert (
+        case_results["stale_fastapi_migration_note_conflict"].result_payload[
+            "scores"
+        ]["rank_order_ok"]
+        == 1.0
+    )
+    assert (
+        case_results["stale_fastapi_migration_note_conflict"].result_payload[
+            "scores"
+        ]["top_source_ok"]
         == 1.0
     )
     assert (

@@ -79,3 +79,26 @@ cases:
     expected_why_selected_contains:
       - signal
     requires_clarification: false
+  - id: stale_fastapi_migration_note_conflict
+    tool: get_dependency_notes
+    query: compare stale internal fastapi migration note with official guidance
+    task_type: migration
+    tenant_id: __TENANT_ID__
+    repo_id: __REPO_ID__
+    package_name: fastapi
+    version_range: 0.115.x
+    topic: migration
+    must_hit_sources:
+      - vendor_doc:https://fastapi.tiangolo.com/release-notes/
+      - repo_doc:docs/fastapi-upgrade-notes.md
+    expected_top_source: vendor_doc:https://fastapi.tiangolo.com/release-notes/
+    expected_authorities:
+      - official
+      - repo
+    expected_freshness_contains:
+      - whitelisted domain
+      - internal repository note
+    must_rank_before:
+      - higher: vendor_doc:https://fastapi.tiangolo.com/release-notes/
+        lower: repo_doc:docs/fastapi-upgrade-notes.md
+    requires_clarification: false

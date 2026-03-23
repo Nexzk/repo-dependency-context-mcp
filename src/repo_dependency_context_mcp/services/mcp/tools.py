@@ -238,6 +238,47 @@ class MCPToolService:
             )
 
         if repo_id is not None:
+            repo_doc_stmt = (
+                select(Document, Source)
+                .join(Source, Source.id == Document.source_id)
+                .where(Document.tenant_id == tenant_id)
+                .where(Document.repo_id == repo_id)
+                .where(Source.source_type == "repo_doc")
+            )
+            repo_docs = self.session.execute(repo_doc_stmt).all()
+            for document, source in repo_docs:
+                searchable = " ".join(
+                    [
+                        document.title or "",
+                        document.section_title or "",
+                        document.raw_text,
+                    ]
+                ).lower()
+                if package_name.lower() not in searchable:
+                    continue
+                if topic and topic.lower() not in searchable:
+                    continue
+                evidence.append(
+                    {
+                        "source_type": "repo_doc",
+                        "title": document.title,
+                        "path_or_url": source.path_or_url,
+                        "symbol_path": None,
+                        "snippet": document.raw_text[:500],
+                        "why_selected": self._why_selected_repo_doc(
+                            document=document,
+                            package_name=package_name,
+                            topic=topic,
+                        ),
+                        "freshness_reason": (
+                            "Freshness: internal repository note from latest local ingest snapshot"
+                        ),
+                        "authority": "repo",
+                        "version_range": None,
+                    }
+                )
+
+        if repo_id is not None:
             dep_stmt = (
                 select(Dependency)
                 .where(Dependency.tenant_id == tenant_id)
@@ -301,6 +342,19 @@ class MCPToolService:
             reasons.append(f"Mentions topic {topic}")
         if doc.doc_type:
             reasons.append(f"Document type is {doc.doc_type}")
+        return "; ".join(reasons)
+
+    def _why_selected_repo_doc(
+        self,
+        document: Document,
+        package_name: str,
+        topic: str | None,
+    ) -> str:
+        reasons = [f"Matches package {package_name}"]
+        if document.title:
+            reasons.append(f"Internal note {document.title}")
+        if topic:
+            reasons.append(f"Context topic {topic}")
         return "; ".join(reasons)
 
     def _why_selected_repo_dependency(self, dependency: Dependency, topic: str | None) -> str:
