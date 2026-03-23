@@ -112,8 +112,15 @@
 ## 下一阶段建议
 
 ### Phase 12：Related Changes 深化
-- [ ] 从 MVP 级匹配升级到更稳定的 change graph / reference graph
-- [ ] 提升 PR / issue / commit 与 symbol / file 的显式关联质量
+- [~] 从 MVP 级匹配升级到更稳定的 change graph / reference graph
+  - [x] repo-backed query expansion：`symbol -> file`、`file -> symbol`
+  - [x] change ingest canonicalization：basename / known symbol -> canonical repo refs
+  - [x] `get_related_changes` 返回 `match_kind` 与 `match_evidence`
+  - [ ] 仍未达到完整 change graph / reference graph
+- [~] 提升 PR / issue / commit 与 symbol / file 的显式关联质量
+  - [x] canonical `related_file_paths`
+  - [x] canonical `related_symbols`
+  - [ ] 仍缺跨变更链路级显式图结构
 
 ### Phase 13：Dependency Docs 深化
 - [ ] 从 bounded discovery 向更强的增量同步策略推进

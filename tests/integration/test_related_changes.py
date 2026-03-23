@@ -106,6 +106,10 @@ def test_get_related_changes_returns_pr_commit_and_issue_summaries(
     assert result["pull_requests"][0]["related_file_paths"] == ["src/auth.py"]
     assert result["pull_requests"][0]["related_symbols"] == ["require_admin"]
     assert result["pull_requests"][0]["source_pr_ref"] == "pr-101"
+    assert result["pull_requests"][0]["match_evidence"] == [
+        "path:src/auth.py",
+        "symbol:require_admin",
+    ]
     assert result["commits"][0]["source_commit_sha"] == "abc123"
     assert result["issues"][0]["source_issue_ref"] == "issue-77"
 
@@ -414,6 +418,7 @@ def test_get_related_changes_expands_symbol_query_to_repo_file_hints(
     refs = [item["external_ref"] for item in result["issues"]]
     assert refs == ["issue-symbol-only", "issue-path-only", "issue-lexical-only"]
     assert result["issues"][1]["match_kind"] == "graph_expanded"
+    assert result["issues"][1]["match_evidence"] == ["expanded_path:src/auth.py"]
 
 
 def test_get_related_changes_expands_path_query_to_repo_symbol_hints(
@@ -510,3 +515,4 @@ def test_get_related_changes_expands_path_query_to_repo_symbol_hints(
     refs = [item["external_ref"] for item in result["commits"]]
     assert refs == ["commit-path-only", "commit-symbol-only", "commit-lexical-only"]
     assert result["commits"][1]["match_kind"] == "graph_expanded"
+    assert result["commits"][1]["match_evidence"] == ["expanded_symbol:require_admin"]

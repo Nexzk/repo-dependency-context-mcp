@@ -1857,6 +1857,10 @@ D. 第一阶段的代码骨架
 1. `related changes` 深化
 - file / symbol / PR / issue / commit 的图式关联
 - 减少当前基于规则匹配的脆弱性
+ - 当前已完成：
+   - repo-backed query expansion
+   - canonical file/symbol refs during change ingest
+   - `match_kind` / `match_evidence` result explanation
 
 2. dependency docs 深化
 - 更强的增量同步策略

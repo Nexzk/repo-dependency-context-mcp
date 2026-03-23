@@ -138,6 +138,7 @@ class MCPToolService:
                 "source_commit_ref": chunk.metadata_json.get("source_commit_ref"),
                 "source_issue_ref": chunk.metadata_json.get("source_issue_ref"),
                 "match_kind": match.kind,
+                "match_evidence": match.evidence,
             }
             if source.source_type == "pr":
                 ranked_items["pull_requests"].append(
@@ -331,9 +332,10 @@ class _RelatedChangeQuery:
 
 
 class _RelatedChangeMatch:
-    def __init__(self, rank: int, kind: str) -> None:
+    def __init__(self, rank: int, kind: str, evidence: list[str]) -> None:
         self.rank = rank
         self.kind = kind
+        self.evidence = evidence
 
 
 def _parse_related_change_query(path_or_symbol: str) -> _RelatedChangeQuery:
@@ -380,19 +382,21 @@ def _score_related_change(
     direct_symbol = _normalize_value(query.symbol)
     path_match = bool(direct_path and direct_path in (related_file_paths or related_paths))
     symbol_match = bool(direct_symbol and direct_symbol in (related_symbols or related_paths))
+    expanded_path_hits = [
+        expanded_path
+        for expanded_path in query.expanded_paths
+        if expanded_path in (related_file_paths or related_paths)
+    ]
+    expanded_symbol_hits = [
+        expanded_symbol
+        for expanded_symbol in query.expanded_symbols
+        if expanded_symbol in (related_symbols or related_paths)
+    ]
     expanded_path_match = bool(
-        query.expanded_paths
-        and any(
-            expanded_path in (related_file_paths or related_paths)
-            for expanded_path in query.expanded_paths
-        )
+        query.expanded_paths and expanded_path_hits
     )
     expanded_symbol_match = bool(
-        query.expanded_symbols
-        and any(
-            expanded_symbol in (related_symbols or related_paths)
-            for expanded_symbol in query.expanded_symbols
-        )
+        query.expanded_symbols and expanded_symbol_hits
     )
 
     searchable = " ".join(
@@ -407,15 +411,34 @@ def _score_related_change(
     lexical_match = any(term in searchable for term in query.lexical_terms)
 
     if path_match and not symbol_match:
-        return _RelatedChangeMatch(rank=6, kind="direct_path")
+        return _RelatedChangeMatch(
+            rank=6,
+            kind="direct_path",
+            evidence=[f"path:{query.path}"],
+        )
     if symbol_match and not path_match:
-        return _RelatedChangeMatch(rank=5, kind="direct_symbol")
+        return _RelatedChangeMatch(
+            rank=5,
+            kind="direct_symbol",
+            evidence=[f"symbol:{query.symbol}"],
+        )
     if path_match and symbol_match:
-        return _RelatedChangeMatch(rank=4, kind="direct_path_and_symbol")
+        return _RelatedChangeMatch(
+            rank=4,
+            kind="direct_path_and_symbol",
+            evidence=[f"path:{query.path}", f"symbol:{query.symbol}"],
+        )
     if expanded_path_match or expanded_symbol_match:
-        return _RelatedChangeMatch(rank=3, kind="graph_expanded")
+        evidence = [f"expanded_path:{value}" for value in expanded_path_hits]
+        evidence.extend(f"expanded_symbol:{value}" for value in expanded_symbol_hits)
+        return _RelatedChangeMatch(rank=3, kind="graph_expanded", evidence=evidence)
     if lexical_match:
-        return _RelatedChangeMatch(rank=2, kind="lexical")
+        lexical_hits = [term for term in query.lexical_terms if term in searchable]
+        return _RelatedChangeMatch(
+            rank=2,
+            kind="lexical",
+            evidence=[f"lexical:{term}" for term in lexical_hits[:3]],
+        )
     return None
 
 
