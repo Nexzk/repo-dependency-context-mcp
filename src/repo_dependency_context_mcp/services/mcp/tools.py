@@ -82,7 +82,11 @@ class MCPToolService:
         path_or_symbol: str,
         since_days: int,
     ) -> JSONDict:
-        query = _parse_related_change_query(path_or_symbol)
+        query = self._expand_related_change_query(
+            tenant_id=tenant_id,
+            repo_id=repo_id,
+            path_or_symbol=path_or_symbol,
+        )
         cutoff = datetime.now(UTC) - timedelta(days=since_days)
         stmt = (
             select(Chunk, Document, Source)
@@ -133,6 +137,7 @@ class MCPToolService:
                 "source_commit_sha": chunk.metadata_json.get("source_commit_sha"),
                 "source_commit_ref": chunk.metadata_json.get("source_commit_ref"),
                 "source_issue_ref": chunk.metadata_json.get("source_issue_ref"),
+                "match_kind": match.kind,
             }
             if source.source_type == "pr":
                 ranked_items["pull_requests"].append(
@@ -150,6 +155,49 @@ class MCPToolService:
             values.sort(key=lambda pair: (-pair[0][0], -pair[0][1], pair[0][2]))
             result[key] = [item for _, item in values]
         return result
+
+    def _expand_related_change_query(
+        self,
+        tenant_id: uuid.UUID,
+        repo_id: uuid.UUID,
+        path_or_symbol: str,
+    ) -> "_RelatedChangeQuery":
+        query = _parse_related_change_query(path_or_symbol)
+        stmt = (
+            select(Chunk, Source.path_or_url)
+            .join(Source, Source.id == Chunk.source_id)
+            .where(Chunk.tenant_id == tenant_id)
+            .where(Chunk.repo_id == repo_id)
+            .where(Source.source_type == "repo_code")
+        )
+        rows = self.session.execute(stmt).all()
+        direct_path = _normalize_value(query.path)
+        direct_symbol = _normalize_value(query.symbol)
+        expanded_paths: set[str] = set()
+        expanded_symbols: set[str] = set()
+
+        for chunk, path_or_url in rows:
+            normalized_path = _normalize_value(path_or_url)
+            symbol_variants = _chunk_symbol_variants(chunk)
+
+            if direct_path and normalized_path == direct_path:
+                expanded_symbols.update(symbol_variants)
+            if direct_symbol and direct_symbol in symbol_variants:
+                expanded_paths.add(normalized_path)
+
+        if direct_path:
+            expanded_paths.discard(direct_path)
+        if direct_symbol:
+            expanded_symbols.discard(direct_symbol)
+
+        return _RelatedChangeQuery(
+            raw=query.raw,
+            path=query.path,
+            symbol=query.symbol,
+            lexical_terms=query.lexical_terms,
+            expanded_paths=sorted(expanded_paths),
+            expanded_symbols=sorted(expanded_symbols),
+        )
 
     def get_dependency_notes(
         self,
@@ -271,16 +319,21 @@ class _RelatedChangeQuery:
         path: str | None,
         symbol: str | None,
         lexical_terms: list[str],
+        expanded_paths: list[str] | None = None,
+        expanded_symbols: list[str] | None = None,
     ) -> None:
         self.raw = raw
         self.path = path
         self.symbol = symbol
         self.lexical_terms = lexical_terms
+        self.expanded_paths = expanded_paths or []
+        self.expanded_symbols = expanded_symbols or []
 
 
 class _RelatedChangeMatch:
-    def __init__(self, rank: int) -> None:
+    def __init__(self, rank: int, kind: str) -> None:
         self.rank = rank
+        self.kind = kind
 
 
 def _parse_related_change_query(path_or_symbol: str) -> _RelatedChangeQuery:
@@ -315,30 +368,73 @@ def _score_related_change(
     document: Document,
     query: _RelatedChangeQuery,
 ) -> _RelatedChangeMatch | None:
-    related_file_paths = [value.lower() for value in _related_file_paths(chunk.metadata_json)]
-    related_symbols = [value.lower() for value in _related_symbols(chunk.metadata_json)]
-    related_paths = [str(value).lower() for value in chunk.metadata_json.get("related_paths", [])]
-    path_match = bool(query.path and query.path.lower() in (related_file_paths or related_paths))
-    symbol_match = bool(query.symbol and query.symbol.lower() in (related_symbols or related_paths))
+    related_file_paths = [
+        _normalize_value(value) for value in _related_file_paths(chunk.metadata_json)
+    ]
+    related_symbols = [_normalize_value(value) for value in _related_symbols(chunk.metadata_json)]
+    related_paths = [
+        _normalize_value(value)
+        for value in chunk.metadata_json.get("related_paths", [])
+    ]
+    direct_path = _normalize_value(query.path)
+    direct_symbol = _normalize_value(query.symbol)
+    path_match = bool(direct_path and direct_path in (related_file_paths or related_paths))
+    symbol_match = bool(direct_symbol and direct_symbol in (related_symbols or related_paths))
+    expanded_path_match = bool(
+        query.expanded_paths
+        and any(
+            expanded_path in (related_file_paths or related_paths)
+            for expanded_path in query.expanded_paths
+        )
+    )
+    expanded_symbol_match = bool(
+        query.expanded_symbols
+        and any(
+            expanded_symbol in (related_symbols or related_paths)
+            for expanded_symbol in query.expanded_symbols
+        )
+    )
 
     searchable = " ".join(
         [
             document.title or "",
             chunk.text,
             " ".join(chunk.metadata_json.get("related_paths", [])),
+            " ".join(_related_file_paths(chunk.metadata_json)),
+            " ".join(_related_symbols(chunk.metadata_json)),
         ]
     ).lower()
     lexical_match = any(term in searchable for term in query.lexical_terms)
 
     if path_match and not symbol_match:
-        return _RelatedChangeMatch(rank=5)
+        return _RelatedChangeMatch(rank=6, kind="direct_path")
     if symbol_match and not path_match:
-        return _RelatedChangeMatch(rank=4)
+        return _RelatedChangeMatch(rank=5, kind="direct_symbol")
     if path_match and symbol_match:
-        return _RelatedChangeMatch(rank=3)
+        return _RelatedChangeMatch(rank=4, kind="direct_path_and_symbol")
+    if expanded_path_match or expanded_symbol_match:
+        return _RelatedChangeMatch(rank=3, kind="graph_expanded")
     if lexical_match:
-        return _RelatedChangeMatch(rank=2)
+        return _RelatedChangeMatch(rank=2, kind="lexical")
     return None
+
+
+def _normalize_value(value: object | None) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().replace("\\", "/").lower()
+
+
+def _chunk_symbol_variants(chunk: Chunk) -> set[str]:
+    variants = set()
+    for raw_value in [chunk.symbol_path, chunk.metadata_json.get("symbol_name")]:
+        normalized = _normalize_value(raw_value)
+        if not normalized:
+            continue
+        variants.add(normalized)
+        variants.add(normalized.split(".")[-1])
+        variants.add(normalized.split("::")[-1])
+    return {value for value in variants if value}
 
 
 def _related_file_paths(metadata: JSONDict) -> list[str]:

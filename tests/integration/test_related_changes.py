@@ -6,7 +6,10 @@ from repo_dependency_context_mcp.services.ingest.local_repo import LocalRepoInge
 from repo_dependency_context_mcp.services.mcp.tools import MCPToolService
 
 
-def test_get_related_changes_returns_pr_commit_and_issue_summaries(db_session, tmp_path: Path) -> None:
+def test_get_related_changes_returns_pr_commit_and_issue_summaries(
+    db_session,
+    tmp_path: Path,
+) -> None:
     repo_root = tmp_path / "sample_repo"
     repo_root.mkdir()
     (repo_root / "src").mkdir()
@@ -253,7 +256,10 @@ def test_get_related_changes_uses_freshness_as_tiebreaker_for_same_match_strengt
     assert refs == ["commit-new", "commit-old"]
 
 
-def test_get_related_changes_prefers_explicit_related_metadata_fields(db_session, tmp_path: Path) -> None:
+def test_get_related_changes_prefers_explicit_related_metadata_fields(
+    db_session,
+    tmp_path: Path,
+) -> None:
     tenant = Tenant(name="Tenant Explicit Metadata", slug="tenant-explicit-metadata")
     db_session.add(tenant)
     db_session.flush()
@@ -312,3 +318,195 @@ def test_get_related_changes_prefers_explicit_related_metadata_fields(db_session
 
     refs = [item["external_ref"] for item in result["issues"]]
     assert refs == ["issue-file-only", "issue-symbol-only"]
+
+
+def test_get_related_changes_expands_symbol_query_to_repo_file_hints(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "symbol_graph_repo"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Symbol Graph", slug="tenant-symbol-graph")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="symbol-graph-repo",
+        provider="local",
+        external_id="symbol-graph-repo",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    fixture_path = tmp_path / "changes_symbol_graph.json"
+    fixture_path.write_text(
+        """
+[
+  {
+    "source_type": "issue",
+    "external_ref": "issue-path-only",
+    "title": "Auth file regression",
+    "body": "Regression tracked at file level only.",
+    "author": "alice",
+    "related_file_paths": ["src/auth.py"],
+    "related_symbols": []
+  },
+  {
+    "source_type": "issue",
+    "external_ref": "issue-symbol-only",
+    "title": "Guard regression",
+    "body": "Regression tracked at symbol level.",
+    "author": "bob",
+    "related_file_paths": [],
+    "related_symbols": ["require_admin"]
+  },
+  {
+    "source_type": "issue",
+    "external_ref": "issue-lexical-only",
+    "title": "Admin authorization regression",
+    "body": "Mentions auth and admin in text only.",
+    "author": "carol",
+    "related_file_paths": [],
+    "related_symbols": []
+  }
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    ChangeMetadataIngestService(db_session).ingest_json_fixture(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        fixture_path=fixture_path,
+        acl_scope={"visibility": "private"},
+    )
+
+    result = MCPToolService(db_session).get_related_changes(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        path_or_symbol="require_admin",
+        since_days=90,
+    )
+
+    refs = [item["external_ref"] for item in result["issues"]]
+    assert refs == ["issue-symbol-only", "issue-path-only", "issue-lexical-only"]
+    assert result["issues"][1]["match_kind"] == "graph_expanded"
+
+
+def test_get_related_changes_expands_path_query_to_repo_symbol_hints(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "path_graph_repo"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Path Graph", slug="tenant-path-graph")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="path-graph-repo",
+        provider="local",
+        external_id="path-graph-repo",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    fixture_path = tmp_path / "changes_path_graph.json"
+    fixture_path.write_text(
+        """
+[
+  {
+    "source_type": "commit",
+    "external_ref": "commit-path-only",
+    "title": "Auth file update",
+    "body": "Tracked at file path level.",
+    "author": "alice",
+    "related_file_paths": ["src/auth.py"],
+    "related_symbols": []
+  },
+  {
+    "source_type": "commit",
+    "external_ref": "commit-symbol-only",
+    "title": "Guard update",
+    "body": "Tracked at symbol level.",
+    "author": "bob",
+    "related_file_paths": [],
+    "related_symbols": ["require_admin"]
+  },
+  {
+    "source_type": "commit",
+    "external_ref": "commit-lexical-only",
+    "title": "Admin authorization follow-up",
+    "body": "Mentions auth and admin in text only.",
+    "author": "carol",
+    "related_file_paths": [],
+    "related_symbols": []
+  }
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    ChangeMetadataIngestService(db_session).ingest_json_fixture(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        fixture_path=fixture_path,
+        acl_scope={"visibility": "private"},
+    )
+
+    result = MCPToolService(db_session).get_related_changes(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        path_or_symbol="src/auth.py",
+        since_days=90,
+    )
+
+    refs = [item["external_ref"] for item in result["commits"]]
+    assert refs == ["commit-path-only", "commit-symbol-only", "commit-lexical-only"]
+    assert result["commits"][1]["match_kind"] == "graph_expanded"
