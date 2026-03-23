@@ -134,12 +134,12 @@
   - [ ] 仍未做 section-level persistence / multi-section indexing
 
 ### Phase 14：Eval Dataset 扩展
-- [~] 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases
+- [x] 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases
   - [x] explain case family
   - [x] debug case family
   - [x] ACL isolation case family
   - [x] stale-doc conflict case family
-  - [ ] ambiguity 仍未补齐
+  - [x] ambiguity case family
 - [ ] 扩大 demo dataset 的任务覆盖面
 
 ### Phase 15：Online Feedback

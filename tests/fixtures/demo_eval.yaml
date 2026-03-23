@@ -102,3 +102,18 @@ cases:
       - higher: vendor_doc:https://fastapi.tiangolo.com/release-notes/
         lower: repo_doc:docs/fastapi-upgrade-notes.md
     requires_clarification: false
+  - id: ambiguity_admin_route_source
+    query: where should i look first for admin route authorization behavior
+    task_type: explain
+    tenant_id: __TENANT_ID__
+    repo_id: __REPO_ID__
+    must_hit_sources:
+      - repo_doc:docs/auth.md
+      - repo_code:src/auth.py
+    expected_authorities:
+      - repo
+    expected_freshness_contains:
+      - repository content
+    expected_why_selected_contains:
+      - signal
+    requires_clarification: true

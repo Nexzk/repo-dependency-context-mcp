@@ -894,20 +894,35 @@ cases:
       - repository content
     expected_why_selected_contains:
       - signal
+  - id: ambiguity_admin_route_source
+    query: where should i look first for admin route authorization behavior
+    task_type: explain
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_doc:docs/auth.md
+      - repo_code:src/auth.py
+    expected_authorities:
+      - repo
+    expected_freshness_contains:
+      - repository content
+    expected_why_selected_contains:
+      - signal
+    requires_clarification: true
 """.strip(),
         encoding="utf-8",
     )
 
     summary = EvalRunnerService(db_session).run_from_yaml(dataset_path)
-    eval_cases = {
-        case.id: case.name for case in db_session.scalars(select(EvalCase)).all()
-    }
+    eval_case_rows = list(db_session.scalars(select(EvalCase)).all())
+    eval_cases = {case.id: case.name for case in eval_case_rows}
     case_results = {
         eval_cases[result.eval_case_id]: result
         for result in db_session.scalars(select(EvalCaseResult)).all()
     }
+    eval_cases_by_name = {case.name: case for case in eval_case_rows}
 
-    assert summary["case_count"] == 5
+    assert summary["case_count"] == 6
     assert summary["recall_at_5"] == 1.0
     assert summary["evidence_contract_score"] == 1.0
     assert summary["overall_score"] >= 0.95
@@ -947,6 +962,18 @@ cases:
     )
     assert (
         case_results["explain_admin_routes"].result_payload["scores"]["authority_match"]
+        == 1.0
+    )
+    assert (
+        eval_cases_by_name["ambiguity_admin_route_source"].metadata_json[
+            "requires_clarification"
+        ]
+        is True
+    )
+    assert (
+        case_results["ambiguity_admin_route_source"].result_payload["scores"][
+            "authority_match"
+        ]
         == 1.0
     )
     assert (
