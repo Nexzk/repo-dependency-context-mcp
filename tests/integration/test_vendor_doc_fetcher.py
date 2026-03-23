@@ -143,7 +143,10 @@ def test_vendor_doc_fetcher_fetches_whitelisted_html_and_persists(db_session) ->
             )
         )
         assert cursor is not None
+        assert cursor.cursor_kind == "vendor_doc_snapshot"
         assert cursor.last_success_at is not None
+        assert '"mode": "fetch"' in cursor.cursor_value
+        assert '"candidate_count": 1' in cursor.cursor_value
         assert run is not None
         assert run.status == "completed"
         assert run.items_written == 1
@@ -189,6 +192,17 @@ def test_vendor_doc_fetcher_discovers_and_batches_multiple_whitelisted_pages(db_
         assert docs[0].section_title == "FastAPI Migration Guide"
         assert docs[0].metadata_json["structure_kind"] == "flat_sections"
         assert docs[1].metadata_json["structure_kind"] == "flat_sections"
+
+        cursor = db_session.scalar(
+            select(SyncCursor).where(
+                SyncCursor.source_kind == "vendor_docs",
+                SyncCursor.scope_key == "fastapi:python",
+            )
+        )
+        assert cursor is not None
+        assert cursor.cursor_kind == "vendor_doc_snapshot"
+        assert '"mode": "discovery"' in cursor.cursor_value
+        assert '"candidate_count": 2' in cursor.cursor_value
 
         accepted_again = service.discover_and_ingest(
             package_name="fastapi",
@@ -428,7 +442,7 @@ def test_vendor_doc_failure_records_run_and_preserves_cursor(
         repo_id=None,
         source_kind="vendor_docs",
         scope_key="fastapi:python",
-        cursor_kind="request_targets",
+        cursor_kind="vendor_doc_snapshot",
         cursor_value='["https://docs.example.com/docs/index"]',
     )
     db_session.add(existing_cursor)

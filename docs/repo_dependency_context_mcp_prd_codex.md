@@ -1868,6 +1868,8 @@ D. 第一阶段的代码骨架
  - 当前已完成：
    - heading / version heading extraction
    - `section_title` and `structure_kind` persistence
+   - snapshot-based vendor-doc sync cursor
+   - candidate-set and content-hash checkpointing
 
 3. eval dataset 深化
 - 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases

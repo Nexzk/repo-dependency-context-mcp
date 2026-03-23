@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass
@@ -60,7 +61,7 @@ class VendorDocIngestService:
             repo_id=None,
             source_kind="vendor_docs",
             scope_key=_scope_key(package_name, ecosystem),
-            cursor_kind="request_targets",
+            cursor_kind="vendor_doc_snapshot",
         )
         candidates: list[VendorDocCandidate] = []
         try:
@@ -96,7 +97,11 @@ class VendorDocIngestService:
             )
             sync_state.mark_success(
                 run=run,
-                cursor_after=_serialize_fetch_targets(requests),
+                cursor_after=_serialize_candidate_snapshot(
+                    requests=requests,
+                    candidates=candidates,
+                    mode="fetch",
+                ),
                 items_seen=len(candidates),
                 items_written=written,
             )
@@ -117,7 +122,7 @@ class VendorDocIngestService:
             repo_id=None,
             source_kind="vendor_docs",
             scope_key=_scope_key(package_name, ecosystem),
-            cursor_kind="request_targets",
+            cursor_kind="vendor_doc_snapshot",
         )
         candidates: list[VendorDocCandidate] = []
         page_cache: dict[str, tuple[str, str | None, str] | None] = {}
@@ -193,7 +198,11 @@ class VendorDocIngestService:
             )
             sync_state.mark_success(
                 run=run,
-                cursor_after=_serialize_discovery_targets(requests),
+                cursor_after=_serialize_candidate_snapshot(
+                    requests=requests,
+                    candidates=candidates,
+                    mode="discovery",
+                ),
                 items_seen=len(candidates),
                 items_written=written,
             )
@@ -408,3 +417,46 @@ def _serialize_fetch_targets(requests: list[VendorDocFetchRequest]) -> str:
 
 def _serialize_discovery_targets(requests: list[VendorDocDiscoveryRequest]) -> str:
     return json.dumps(sorted(request.index_url for request in requests))
+
+
+def _serialize_candidate_snapshot(
+    requests: list[VendorDocFetchRequest] | list[VendorDocDiscoveryRequest],
+    candidates: list[VendorDocCandidate],
+    mode: str,
+) -> str:
+    request_items: list[dict[str, object]] = []
+    for request in requests:
+        request_items.append(
+            {
+                "doc_type": getattr(request, "doc_type", None),
+                "url": getattr(request, "url", None),
+                "index_url": getattr(request, "index_url", None),
+                "version_range": getattr(request, "version_range", None),
+            }
+        )
+
+    candidate_items = [
+        {
+            "url": candidate.url,
+            "doc_type": candidate.doc_type,
+            "section_title": candidate.section_title,
+            "version_range": candidate.version_range,
+            "content_hash": hashlib.sha256(candidate.raw_text.encode("utf-8")).hexdigest(),
+        }
+        for candidate in sorted(candidates, key=lambda item: item.url)
+    ]
+    payload = {
+        "mode": mode,
+        "request_count": len(requests),
+        "candidate_count": len(candidates),
+        "requests": sorted(
+            request_items,
+            key=lambda item: (
+                str(item.get("index_url") or item.get("url") or ""),
+                str(item.get("doc_type") or ""),
+                str(item.get("version_range") or ""),
+            ),
+        ),
+        "candidates": candidate_items,
+    }
+    return json.dumps(payload, sort_keys=True)
