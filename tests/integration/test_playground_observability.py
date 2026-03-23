@@ -697,3 +697,8 @@ cases:
         "hybrid_dual_route_dense_boost_v1",
     }
     assert matrix_summary["best_run"]["rerank_profile"] == "local_task_aware_v2"
+
+    playground = client.get("/playground")
+    assert playground.status_code == 200
+    assert "Best Matrix Profile" in playground.text
+    assert "local_task_aware_v2" in playground.text
