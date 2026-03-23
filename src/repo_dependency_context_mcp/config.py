@@ -24,6 +24,8 @@ class Settings:
     openai_embedding_model: str = "text-embedding-3-small"
     rerank_provider: str = "local"
     openai_rerank_model: str = "gpt-5-mini"
+    retrieval_candidate_profile: str = "hybrid_dual_route_v1"
+    retrieval_rerank_profile: str = "local_task_aware_v2"
 
     def __post_init__(self) -> None:
         self.app_name = os.getenv("RDCMCP_APP_NAME", self.app_name)
@@ -31,13 +33,31 @@ class Settings:
         self.database_url = os.getenv("RDCMCP_DATABASE_URL", self.database_url)
         self.redis_url = os.getenv("RDCMCP_REDIS_URL", self.redis_url)
         self.log_level = os.getenv("RDCMCP_LOG_LEVEL", self.log_level)
-        self.default_top_k = int(os.getenv("RDCMCP_DEFAULT_TOP_K", str(self.default_top_k)))
-        self.embedding_provider = os.getenv("RDCMCP_EMBEDDING_PROVIDER", self.embedding_provider)
-        self.embedding_dimension = int(os.getenv("RDCMCP_EMBEDDING_DIMENSION", str(self.embedding_dimension)))
+        self.default_top_k = int(
+            os.getenv("RDCMCP_DEFAULT_TOP_K", str(self.default_top_k))
+        )
+        self.embedding_provider = os.getenv(
+            "RDCMCP_EMBEDDING_PROVIDER",
+            self.embedding_provider,
+        )
+        self.embedding_dimension = int(
+            os.getenv("RDCMCP_EMBEDDING_DIMENSION", str(self.embedding_dimension))
+        )
         self.openai_api_key = os.getenv("RDCMCP_OPENAI_API_KEY", self.openai_api_key)
-        self.openai_embedding_model = os.getenv("RDCMCP_OPENAI_EMBEDDING_MODEL", self.openai_embedding_model)
+        self.openai_embedding_model = os.getenv(
+            "RDCMCP_OPENAI_EMBEDDING_MODEL",
+            self.openai_embedding_model,
+        )
         self.rerank_provider = os.getenv("RDCMCP_RERANK_PROVIDER", self.rerank_provider)
         self.openai_rerank_model = os.getenv("RDCMCP_OPENAI_RERANK_MODEL", self.openai_rerank_model)
+        self.retrieval_candidate_profile = os.getenv(
+            "RDCMCP_RETRIEVAL_CANDIDATE_PROFILE",
+            self.retrieval_candidate_profile,
+        )
+        self.retrieval_rerank_profile = os.getenv(
+            "RDCMCP_RETRIEVAL_RERANK_PROFILE",
+            self.retrieval_rerank_profile,
+        )
         self.vendor_official_domains = _read_csv_env(
             "RDCMCP_VENDOR_OFFICIAL_DOMAINS",
             "docs.python.org,fastapi.tiangolo.com,docs.sqlalchemy.org",

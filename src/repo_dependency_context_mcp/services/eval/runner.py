@@ -200,6 +200,14 @@ class EvalRunnerService:
                 else 0.0
             ),
             "overall_score": sum(overall_scores) / len(overall_scores) if overall_scores else 0.0,
+            "retrieval_profiles": {
+                "candidate_profile": (
+                    self.tool_service.search_service.settings.retrieval_candidate_profile
+                ),
+                "rerank_profile": (
+                    self.tool_service.search_service.settings.retrieval_rerank_profile
+                ),
+            },
         }
         eval_run.status = "completed"
         eval_run.summary_json = summary

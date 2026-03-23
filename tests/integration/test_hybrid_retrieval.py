@@ -86,6 +86,8 @@ def test_search_context_returns_evidence_and_persists_query_audit(
     assert query_log is not None
     assert query_log.query_text == "where is admin authorization logic"
     assert query_log.result_count == len(response["evidence"])
+    assert query_log.filters["candidate_profile"] == "hybrid_dual_route_v1"
+    assert query_log.filters["rerank_profile"] == "local_task_aware_v2"
 
     query_results = db_session.scalars(select(QueryResult).order_by(QueryResult.rank)).all()
     assert len(query_results) == len(response["evidence"])
