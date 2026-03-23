@@ -614,3 +614,86 @@ cases:
     latest_run = metrics.json()["latest_eval_runs"][0]
     assert latest_run["retrieval_profiles"]["candidate_profile"] == "hybrid_dual_route_v1"
     assert latest_run["retrieval_profiles"]["rerank_profile"] == "local_task_aware_v2"
+
+
+def test_metrics_exposes_latest_eval_matrix_summary(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_matrix"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Obs Matrix", slug="tenant-obs-matrix")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-matrix",
+        provider="local",
+        external_id="sample-repo-matrix",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    dataset_path = tmp_path / "eval_matrix.yaml"
+    dataset_path.write_text(
+        f"""
+name: obs-eval-matrix
+description: matrix eval for observability
+cases:
+  - id: locate_auth
+    query: where is admin authorization logic
+    task_type: locate
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+""".strip(),
+        encoding="utf-8",
+    )
+    EvalRunnerService(db_session).run_profile_matrix(
+        dataset_path,
+        candidate_profiles=[
+            "hybrid_dual_route_v1",
+            "hybrid_dual_route_dense_boost_v1",
+        ],
+        rerank_profiles=["local_task_aware_v2"],
+    )
+
+    client = TestClient(app)
+    metrics = client.get("/api/observability/metrics")
+
+    assert metrics.status_code == 200
+    payload = metrics.json()
+    matrix_summary = payload["latest_eval_matrix_summary"]
+    assert matrix_summary is not None
+    assert matrix_summary["run_count"] == 2
+    assert matrix_summary["best_run"] is not None
+    assert len(matrix_summary["runs"]) == 2
+    assert matrix_summary["best_run"]["candidate_profile"] in {
+        "hybrid_dual_route_v1",
+        "hybrid_dual_route_dense_boost_v1",
+    }
+    assert matrix_summary["best_run"]["rerank_profile"] == "local_task_aware_v2"
