@@ -29,6 +29,8 @@ rdcmcp github ingest <tenant_id> <repo_id> <owner> <repo_name> [base_url]
 rdcmcp vendor fetch <package_name> <ecosystem> <url> <version_range>
 rdcmcp vendor discover <package_name> <ecosystem> <index_url> <version_range>
 rdcmcp eval run <dataset.yaml>
+rdcmcp eval run <dataset.yaml> --baseline-dataset-name <dataset_name>
+rdcmcp eval run <dataset.yaml> --candidate-profiles <p1,p2> --rerank-profiles <r1,r2>
 ```
 
 `vendor discover` performs controlled multi-page vendor docs discovery using the configured official-domain whitelist, inferred doc types, URL-prefix filtering, and bounded page counts.
