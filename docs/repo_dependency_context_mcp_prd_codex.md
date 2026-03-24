@@ -1834,7 +1834,6 @@ D. 第一阶段的代码骨架
   - `--failures-only`
 
 ### 33.3 与 PRD 仍有差距的项
-- 已完成 `feedback ingest`，但还未把反馈稳定回灌成增量 eval case
 - `related changes` 仍是增强版 MVP 匹配，不是完整 change graph
 - dependency docs 仍是 bounded discovery / sync，不是 crawler-level 全站抓取
 - 生产级 OpenTelemetry / tracing 仍偏轻量实现
@@ -1883,4 +1882,4 @@ D. 第一阶段的代码骨架
 
 4. online feedback
 - 已完成 feedback ingest
-- 把线上失败案例稳定回灌到 eval datasets
+- 已完成 feedback -> incremental eval export

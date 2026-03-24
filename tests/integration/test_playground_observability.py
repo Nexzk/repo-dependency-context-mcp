@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from repo_dependency_context_mcp.db.models import QueryFeedback, Repo, Tenant
+from repo_dependency_context_mcp.db.models import QueryFeedback, QueryResult, Repo, Tenant
 from repo_dependency_context_mcp.main import app
 from repo_dependency_context_mcp.services.eval.runner import EvalRunnerService
 from repo_dependency_context_mcp.services.ingest.local_repo import LocalRepoIngestService
@@ -158,6 +158,116 @@ def test_query_feedback_ingest_is_recorded_and_counted(
     metrics = client.get("/api/observability/metrics")
     assert metrics.status_code == 200
     assert metrics.json()["query_feedback"] == 1
+
+
+def test_query_feedback_can_be_exported_as_incremental_eval_cases(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sample_repo_feedback_export"
+    repo_root.mkdir()
+    (repo_root / "src").mkdir()
+    (repo_root / "src" / "auth.py").write_text(
+        "\n".join(
+            [
+                "def require_admin(user):",
+                "    if not user.get('is_admin'):",
+                "        raise PermissionError('admin only')",
+                "    return True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_root / "docs").mkdir()
+    (repo_root / "docs" / "auth.md").write_text(
+        "# Authentication\n\nThe require_admin helper protects admin-only routes.\n",
+        encoding="utf-8",
+    )
+
+    tenant = Tenant(name="Tenant Feedback Export", slug="tenant-feedback-export")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="sample-repo-feedback-export",
+        provider="local",
+        external_id="sample-repo-feedback-export",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    LocalRepoIngestService(db_session).ingest_repo(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        repo_path=repo_root,
+        acl_scope={"visibility": "private"},
+    )
+
+    client = TestClient(app)
+    search_response = client.post(
+        "/api/query/search",
+        json={
+            "tenant_id": str(tenant.id),
+            "repo_id": str(repo.id),
+            "query": "where is admin authorization logic",
+            "task_type": "locate",
+            "top_k": 3,
+        },
+    )
+    assert search_response.status_code == 200
+    search_payload = search_response.json()
+    top_source_key = (
+        f"{search_payload['evidence'][0]['source_type']}:"
+        f"{search_payload['evidence'][0]['path_or_url']}"
+    )
+
+    missed_feedback = client.post(
+        "/api/query/feedback",
+        json={
+            "query_log_id": search_payload["query_log_id"],
+            "feedback_type": "missed_document",
+            "expected_source_keys": ["repo_doc:docs/auth.md"],
+        },
+    )
+    assert missed_feedback.status_code == 200
+
+    top_query_result = db_session.query(QueryResult).order_by(QueryResult.rank).first()
+    assert top_query_result is not None
+
+    wrong_source_feedback = client.post(
+        "/api/query/feedback",
+        json={
+            "query_log_id": search_payload["query_log_id"],
+            "query_result_id": str(top_query_result.id),
+            "feedback_type": "wrong_source",
+            "expected_source_keys": ["repo_doc:docs/auth.md"],
+        },
+    )
+    assert wrong_source_feedback.status_code == 200
+
+    export_response = client.get(
+        "/api/query/feedback/export",
+        params={"tenant_id": str(tenant.id), "repo_id": str(repo.id)},
+    )
+    assert export_response.status_code == 200
+    export_payload = export_response.json()
+    assert export_payload["metadata"]["feedback_count"] == 2
+
+    cases = {case["id"]: case for case in export_payload["cases"]}
+    missed_case = next(
+        case for case in cases.values() if case["metadata"]["feedback_type"] == "missed_document"
+    )
+    assert missed_case["must_hit_sources"] == ["repo_doc:docs/auth.md"]
+    assert missed_case["expected_top_source"] == "repo_doc:docs/auth.md"
+
+    wrong_case = next(
+        case for case in cases.values() if case["metadata"]["feedback_type"] == "wrong_source"
+    )
+    assert wrong_case["must_hit_sources"] == ["repo_doc:docs/auth.md"]
+    assert wrong_case["must_not_hit_sources"] == [top_source_key]
 
 
 def test_metrics_exposes_latest_eval_failure_diagnostics(

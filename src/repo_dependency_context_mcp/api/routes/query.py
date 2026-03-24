@@ -7,6 +7,9 @@ from pydantic import BaseModel
 
 from repo_dependency_context_mcp.api.deps import get_db_session
 from repo_dependency_context_mcp.db.models import QueryFeedback, QueryLog, QueryResult
+from repo_dependency_context_mcp.services.eval.feedback_export import (
+    FeedbackEvalExportService,
+)
 from repo_dependency_context_mcp.services.mcp.tools import MCPToolService
 
 router = APIRouter(prefix="/api", tags=["query"])
@@ -89,3 +92,19 @@ def ingest_feedback(request: FeedbackRequest) -> dict:
             "feedback_type": feedback.feedback_type,
             "expected_source_keys": feedback.expected_source_keys,
         }
+
+
+@router.get("/query/feedback/export")
+def export_feedback_as_eval_dataset(
+    tenant_id: str,
+    repo_id: str | None = None,
+    limit: int = 50,
+    feedback_type: str | None = None,
+) -> dict:
+    with get_db_session() as session:
+        return FeedbackEvalExportService(session).export_dataset_payload(
+            tenant_id=uuid.UUID(tenant_id),
+            repo_id=uuid.UUID(repo_id) if repo_id else None,
+            limit=limit,
+            feedback_type=feedback_type,
+        )

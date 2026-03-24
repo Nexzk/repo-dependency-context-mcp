@@ -144,7 +144,7 @@
 
 ### Phase 15：Online Feedback
 - [x] 落地 T-083 feedback ingest
-- [ ] 将反馈回灌成增量 eval case
+- [x] 将反馈回灌成增量 eval case
 
 ## 当前发布检查
 - [x] demo repo ingest 成功
