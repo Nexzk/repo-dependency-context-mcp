@@ -71,7 +71,12 @@ class VendorDocIngestService:
                     if not self._is_allowed_domain(request.url, allowed_domains):
                         continue
 
-                    response = client.get(request.url)
+                    response = client.get(
+                        request.url,
+                        headers=self._conditional_headers(request.url),
+                    )
+                    if response.status_code == 304:
+                        continue
                     response.raise_for_status()
                     parser = _SimpleHtmlDocParser()
                     parser.feed(response.text)
@@ -85,7 +90,10 @@ class VendorDocIngestService:
                             section_title=_resolve_section_title(parser),
                             raw_text=parser.text_content(),
                             version_range=request.version_range,
-                            metadata_json=_doc_structure_metadata(parser),
+                            metadata_json=_doc_structure_metadata(
+                                parser,
+                                response_headers=response.headers,
+                            ),
                         )
                     )
 
@@ -125,7 +133,7 @@ class VendorDocIngestService:
             cursor_kind="vendor_doc_snapshot",
         )
         candidates: list[VendorDocCandidate] = []
-        page_cache: dict[str, tuple[str, str | None, str] | None] = {}
+        page_cache: dict[str, dict[str, object] | None] = {}
         try:
             with httpx.Client(follow_redirects=True, timeout=10.0) as client:
                 for request in requests:
@@ -148,22 +156,34 @@ class VendorDocIngestService:
                     for page_url in page_urls:
                         if page_url not in page_cache:
                             try:
-                                page_response = client.get(page_url)
+                                page_response = client.get(
+                                    page_url,
+                                    headers=self._conditional_headers(page_url),
+                                )
+                                if page_response.status_code == 304:
+                                    page_cache[page_url] = None
+                                    continue
                                 page_response.raise_for_status()
                             except Exception:
                                 page_cache[page_url] = None
                                 continue
                             page_parser = _SimpleHtmlDocParser()
                             page_parser.feed(page_response.text)
-                            page_cache[page_url] = (
-                                page_parser.title or page_url,
-                                page_parser.first_heading,
-                                page_parser.text_content(),
-                            )
+                            page_cache[page_url] = {
+                                "title": page_parser.title or page_url,
+                                "section_title": _resolve_section_title(page_parser),
+                                "raw_text": page_parser.text_content(),
+                                "metadata_json": _doc_structure_metadata(
+                                    page_parser,
+                                    response_headers=page_response.headers,
+                                ),
+                            }
                         page_data = page_cache[page_url]
                         if page_data is None:
                             continue
-                        page_title, section_title, raw_text = page_data
+                        page_title = str(page_data["title"])
+                        section_title = page_data.get("section_title")
+                        raw_text = str(page_data["raw_text"])
                         resolved_doc_type = _infer_doc_type(
                             url=page_url,
                             title=page_title,
@@ -183,10 +203,12 @@ class VendorDocIngestService:
                                 authority="official",
                                 url=page_url,
                                 title=page_title,
-                                section_title=_resolve_section_title(page_parser),
+                                section_title=(
+                                    str(section_title) if section_title is not None else None
+                                ),
                                 raw_text=raw_text,
                                 version_range=request.version_range,
-                                metadata_json=_doc_structure_metadata(page_parser),
+                                metadata_json=dict(page_data.get("metadata_json", {})),
                             )
                         )
 
@@ -279,6 +301,22 @@ class VendorDocIngestService:
 
         self.session.commit()
         return accepted
+
+    def _conditional_headers(self, url: str) -> dict[str, str]:
+        existing = self.session.execute(
+            select(DependencyDoc).where(DependencyDoc.url == url)
+        ).scalar_one_or_none()
+        if existing is None:
+            return {}
+        metadata = existing.metadata_json or {}
+        headers: dict[str, str] = {}
+        etag = metadata.get("etag")
+        last_modified = metadata.get("last_modified")
+        if etag:
+            headers["If-None-Match"] = str(etag)
+        if last_modified:
+            headers["If-Modified-Since"] = str(last_modified)
+        return headers
 
     def _is_allowed_domain(self, url: str, allowed_domains: list[str]) -> bool:
         if not allowed_domains:
@@ -393,14 +431,25 @@ def _resolve_section_title(parser: _SimpleHtmlDocParser) -> str | None:
     return parser.first_heading
 
 
-def _doc_structure_metadata(parser: _SimpleHtmlDocParser) -> dict[str, object]:
-    return {
+def _doc_structure_metadata(
+    parser: _SimpleHtmlDocParser,
+    response_headers: object | None = None,
+) -> dict[str, object]:
+    metadata = {
         "headings": parser.headings[:10],
         "version_headings": parser.version_headings[:10],
         "structure_kind": (
             "versioned_sections" if parser.version_headings else "flat_sections"
         ),
     }
+    if response_headers is not None:
+        etag = response_headers.get("etag")
+        last_modified = response_headers.get("last-modified")
+        if etag:
+            metadata["etag"] = etag
+        if last_modified:
+            metadata["last_modified"] = last_modified
+    return metadata
 
 
 def _global_tenant_id() -> uuid.UUID:

@@ -499,9 +499,11 @@ class FakeHttpResponse:
         self,
         text: str,
         status_code: int = 200,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.text = text
         self.status_code = status_code
+        self.headers = headers or {}
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -513,14 +515,23 @@ class FakeHttpClient:
         self,
         responses: dict[str, str],
         status_codes: dict[str, int] | None = None,
+        headers_by_url: dict[str, dict[str, str]] | None = None,
+        required_request_headers: dict[str, dict[str, str]] | None = None,
     ) -> None:
         self._responses = responses
         self._status_codes = status_codes or {}
+        self._headers_by_url = headers_by_url or {}
+        self._required_request_headers = required_request_headers or {}
 
-    def get(self, url: str) -> FakeHttpResponse:
+    def get(self, url: str, headers: dict[str, str] | None = None) -> FakeHttpResponse:
+        expected_headers = self._required_request_headers.get(url, {})
+        actual_headers = headers or {}
+        for key, value in expected_headers.items():
+            assert actual_headers.get(key) == value
         return FakeHttpResponse(
             text=self._responses.get(url, ""),
             status_code=self._status_codes.get(url, 200),
+            headers=self._headers_by_url.get(url, {}),
         )
 
     def __enter__(self) -> "FakeHttpClient":
@@ -540,3 +551,62 @@ def _make_candidate(**kwargs: object) -> object:
 
 def _nil_uuid() -> uuid.UUID:
     return uuid.UUID("00000000-0000-0000-0000-000000000000")
+
+
+def test_fetch_and_ingest_uses_conditional_headers_and_skips_unchanged_docs(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["docs.example.com"]},
+    )
+    db_session.add(
+        DependencyDoc(
+            package_name="fastapi",
+            ecosystem="python",
+            doc_type="release_notes",
+            authority="official",
+            url="https://docs.example.com/release-notes",
+            version_range=">=0.110,<1.0",
+            title="Release Notes",
+            section_title="v1",
+            raw_text="Existing release notes",
+            metadata_json={
+                "etag": "\"etag-v1\"",
+                "last_modified": "Mon, 24 Mar 2026 10:00:00 GMT",
+            },
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "repo_dependency_context_mcp.services.dependencies.vendor_docs.httpx.Client",
+        lambda *args, **kwargs: FakeHttpClient(
+            responses={"https://docs.example.com/release-notes": ""},
+            status_codes={"https://docs.example.com/release-notes": 304},
+            required_request_headers={
+                "https://docs.example.com/release-notes": {
+                    "If-None-Match": "\"etag-v1\"",
+                    "If-Modified-Since": "Mon, 24 Mar 2026 10:00:00 GMT",
+                }
+            },
+        ),
+    )
+
+    result = service.fetch_and_ingest(
+        "fastapi",
+        "python",
+        [
+            VendorDocFetchRequest(
+                doc_type="release_notes",
+                url="https://docs.example.com/release-notes",
+                version_range=">=0.110,<1.0",
+            )
+        ],
+    )
+
+    assert result == 0
+    docs = db_session.scalars(select(DependencyDoc)).all()
+    assert len(docs) == 1
+    assert docs[0].raw_text == "Existing release notes"
