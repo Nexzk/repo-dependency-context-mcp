@@ -108,6 +108,7 @@ class SearchContextService:
         query_log.latency_ms = 0
         self.session.commit()
         return {
+            "query_log_id": str(query_log.id),
             "task_type": task_type or "locate",
             "clarify_needed": False,
             "evidence": evidence,

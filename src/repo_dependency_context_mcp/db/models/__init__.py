@@ -14,7 +14,7 @@ from repo_dependency_context_mcp.db.models.eval import (
     EvalRun,
 )
 from repo_dependency_context_mcp.db.models.identity import Repo, RepoMembership, Tenant, User
-from repo_dependency_context_mcp.db.models.query import QueryLog, QueryResult
+from repo_dependency_context_mcp.db.models.query import QueryFeedback, QueryLog, QueryResult
 from repo_dependency_context_mcp.db.models.sync_state import SyncCursor, SyncRun
 
 __all__ = [
@@ -27,6 +27,7 @@ __all__ = [
     "EvalDataset",
     "EvalRun",
     "IngestJob",
+    "QueryFeedback",
     "QueryLog",
     "QueryResult",
     "Repo",

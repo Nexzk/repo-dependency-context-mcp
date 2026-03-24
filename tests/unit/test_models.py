@@ -9,6 +9,7 @@ from repo_dependency_context_mcp.db.models import (  # noqa: F401
     EvalDataset,
     EvalRun,
     IngestJob,
+    QueryFeedback,
     QueryLog,
     QueryResult,
     Repo,
@@ -31,6 +32,7 @@ def test_core_tables_are_registered() -> None:
         "eval_datasets",
         "eval_runs",
         "ingest_jobs",
+        "query_feedback",
         "query_logs",
         "query_results",
         "repo_memberships",
@@ -60,10 +62,13 @@ def test_chunk_table_has_acl_authority_and_uniqueness_guards() -> None:
 def test_query_logging_schema_captures_selection_metadata() -> None:
     query_logs = Base.metadata.tables["query_logs"]
     query_results = Base.metadata.tables["query_results"]
+    query_feedback = Base.metadata.tables["query_feedback"]
 
     assert "filters" in query_logs.c
     assert "result_count" in query_logs.c
     assert "why_selected" in query_results.c
+    assert "feedback_type" in query_feedback.c
+    assert "expected_source_keys" in query_feedback.c
     assert any(
         constraint.columns.keys() == ["query_log_id", "rank"]
         for constraint in query_results.constraints

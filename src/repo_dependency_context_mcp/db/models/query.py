@@ -44,9 +44,25 @@ class QueryLog(UUIDPrimaryKeyMixin, Base):
     normalized_query: Mapped[str | None] = mapped_column(Text, nullable=True)
     filters: Mapped[dict] = jsonb_column()
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    result_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    clarify_needed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict, server_default="{}")
+    result_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    clarify_needed: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    metadata_json: Mapped[dict] = mapped_column(
+        "metadata",
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -79,9 +95,63 @@ class QueryResult(UUIDPrimaryKeyMixin, Base):
     score_authority: Mapped[float | None] = mapped_column(Float, nullable=True)
     score_version_match: Mapped[float | None] = mapped_column(Float, nullable=True)
     why_selected: Mapped[str] = mapped_column(Text, nullable=False)
-    evidence_payload: Mapped[dict] = mapped_column("evidence", JSONB, nullable=False, default=dict, server_default="{}")
+    evidence_payload: Mapped[dict] = mapped_column(
+        "evidence",
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
     authority: Mapped[str | None] = mapped_column(String(64), nullable=True)
     freshness_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class QueryFeedback(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "query_feedback"
+    __table_args__ = (
+        Index("ix_query_feedback_query_log_created_at", "query_log_id", "created_at"),
+        Index("ix_query_feedback_tenant_created_at", "tenant_id", "created_at"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    repo_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("repos.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    query_log_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("query_logs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    query_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("query_results.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    feedback_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_source_keys: Mapped[list] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
+    metadata_json: Mapped[dict] = mapped_column(
+        "metadata",
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

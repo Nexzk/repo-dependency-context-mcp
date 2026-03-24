@@ -143,7 +143,7 @@
 - [ ] 扩大 demo dataset 的任务覆盖面
 
 ### Phase 15：Online Feedback
-- [ ] 落地 T-083 feedback ingest
+- [x] 落地 T-083 feedback ingest
 - [ ] 将反馈回灌成增量 eval case
 
 ## 当前发布检查

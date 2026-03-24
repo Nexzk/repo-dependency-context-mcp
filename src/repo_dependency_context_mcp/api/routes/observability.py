@@ -12,6 +12,7 @@ from repo_dependency_context_mcp.db.models import (
     EvalDataset,
     EvalRun,
     IngestJob,
+    QueryFeedback,
     QueryLog,
     SyncCursor,
     SyncRun,
@@ -46,6 +47,7 @@ def metrics(baseline_dataset_name: str | None = None) -> dict:
         return {
             "ingest_jobs": session.scalar(select(func.count()).select_from(IngestJob)) or 0,
             "query_logs": session.scalar(select(func.count()).select_from(QueryLog)) or 0,
+            "query_feedback": session.scalar(select(func.count()).select_from(QueryFeedback)) or 0,
             "eval_runs": session.scalar(select(func.count()).select_from(EvalRun)) or 0,
             "sync_cursors": session.scalar(select(func.count()).select_from(SyncCursor)) or 0,
             "sync_runs": session.scalar(select(func.count()).select_from(SyncRun)) or 0,

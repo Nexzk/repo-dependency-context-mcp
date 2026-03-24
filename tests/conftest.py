@@ -41,6 +41,7 @@ def db_session(db_engine) -> Session:
         "eval_runs",
         "eval_cases",
         "eval_datasets",
+        "query_feedback",
         "query_results",
         "query_logs",
         "ingest_jobs",
@@ -60,7 +61,12 @@ def db_session(db_engine) -> Session:
     session: Session | None = None
     try:
         lock_connection.execute(text(f"SELECT pg_advisory_lock({TEST_DB_LOCK_ID})"))
-        lock_connection.execute(text(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE"))
+        lock_connection.execute(
+            text(
+                f"TRUNCATE TABLE {', '.join(table_names)} "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
         lock_connection.commit()
 
         session_factory = create_session_factory(Settings())
@@ -70,6 +76,7 @@ def db_session(db_engine) -> Session:
         if session is not None:
             session.close()
         try:
+            lock_connection.rollback()
             lock_connection.execute(text(f"SELECT pg_advisory_unlock({TEST_DB_LOCK_ID})"))
         finally:
             lock_connection.close()
