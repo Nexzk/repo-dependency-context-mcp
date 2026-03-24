@@ -1868,6 +1868,7 @@ D. 第一阶段的代码骨架
  - 当前已完成：
    - heading / version heading extraction
    - `section_title` and `structure_kind` persistence
+   - section-level persistence and multi-section indexing
    - snapshot-based vendor-doc sync cursor
    - candidate-set and content-hash checkpointing
    - basic conditional requests via ETag / Last-Modified

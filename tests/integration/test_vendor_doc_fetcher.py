@@ -8,8 +8,16 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from repo_dependency_context_mcp.db.models import DependencyDoc, SyncCursor, SyncRun
+from repo_dependency_context_mcp.db.models import (
+    Chunk,
+    DependencyDoc,
+    Document,
+    Source,
+    SyncCursor,
+    SyncRun,
+)
 from repo_dependency_context_mcp.services.dependencies.vendor_docs import (
+    VendorDocCandidate,
     VendorDocDiscoveryRequest,
     VendorDocFetchRequest,
     VendorDocIngestService,
@@ -153,6 +161,83 @@ def test_vendor_doc_fetcher_fetches_whitelisted_html_and_persists(db_session) ->
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_vendor_doc_fetcher_persists_section_documents_and_chunks(db_session) -> None:
+    service = VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["fastapi.tiangolo.com"]},
+    )
+
+    accepted = service.ingest_candidates(
+        package_name="fastapi",
+        ecosystem="python",
+        candidates=[
+            VendorDocCandidate(
+                doc_type="release_notes",
+                authority="official",
+                url="https://fastapi.tiangolo.com/release-notes/",
+                title="FastAPI Release Notes",
+                section_title="0.115",
+                raw_text=(
+                    "FastAPI Release Notes\n"
+                    "0.115\nOfficial migration details for FastAPI 0.115.\n"
+                    "0.116\nOfficial migration details for FastAPI 0.116."
+                ),
+                version_range=">=0.115,<0.117",
+                metadata_json={
+                    "structure_kind": "versioned_sections",
+                    "version_headings": ["0.115", "0.116"],
+                    "sections": [
+                        {
+                            "section_title": "0.115",
+                            "heading": "0.115",
+                            "raw_text": "Official migration details for FastAPI 0.115.",
+                            "section_index": 0,
+                        },
+                        {
+                            "section_title": "0.116",
+                            "heading": "0.116",
+                            "raw_text": "Official migration details for FastAPI 0.116.",
+                            "section_index": 1,
+                        },
+                    ],
+                },
+            )
+        ],
+    )
+
+    assert accepted == 1
+    source = db_session.scalar(
+        select(Source).where(
+            Source.source_type == "vendor_doc",
+            Source.path_or_url == "https://fastapi.tiangolo.com/release-notes/",
+        )
+    )
+    assert source is not None
+    documents = db_session.scalars(
+        select(Document)
+        .where(Document.source_id == source.id)
+        .order_by(Document.section_title)
+    ).all()
+    chunks = db_session.scalars(
+        select(Chunk)
+        .where(Chunk.source_id == source.id)
+        .order_by(Chunk.chunk_index)
+    ).all()
+
+    assert [document.section_title for document in documents] == ["0.115", "0.116"]
+    assert [chunk.chunk_type for chunk in chunks] == [
+        "vendor_doc_section",
+        "vendor_doc_section",
+    ]
+    assert "FastAPI 0.115" in chunks[0].text
+    assert "FastAPI 0.116" in chunks[1].text
+    assert documents[0].metadata_json["parent_dependency_doc_url"] == (
+        "https://fastapi.tiangolo.com/release-notes/"
+    )
+    assert documents[0].metadata_json["section_index"] == 0
+    assert documents[1].metadata_json["section_index"] == 1
 
 
 def test_vendor_doc_fetcher_discovers_and_batches_multiple_whitelisted_pages(db_session) -> None:

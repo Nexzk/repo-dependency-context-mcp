@@ -8,11 +8,12 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from repo_dependency_context_mcp.db.models import DependencyDoc
+from repo_dependency_context_mcp.db.models import Chunk, DependencyDoc, Document, Source
 from repo_dependency_context_mcp.services.ingest.sync_state import SyncStateService
+from repo_dependency_context_mcp.services.retrieval.embedding import embed_text
 
 
 @dataclass(slots=True)
@@ -272,6 +273,12 @@ class VendorDocIngestService:
                     and existing.metadata_json == metadata
                 )
                 if unchanged:
+                    self._sync_section_index(
+                        package_name=package_name,
+                        ecosystem=ecosystem,
+                        candidate=candidate,
+                        metadata=metadata,
+                    )
                     continue
                 existing.package_name = package_name
                 existing.ecosystem = ecosystem
@@ -297,6 +304,12 @@ class VendorDocIngestService:
                         metadata_json=metadata,
                     )
                 )
+            self._sync_section_index(
+                package_name=package_name,
+                ecosystem=ecosystem,
+                candidate=candidate,
+                metadata=metadata,
+            )
             accepted += 1
 
         self.session.commit()
@@ -317,6 +330,114 @@ class VendorDocIngestService:
         if last_modified:
             headers["If-Modified-Since"] = str(last_modified)
         return headers
+
+    def _sync_section_index(
+        self,
+        package_name: str,
+        ecosystem: str,
+        candidate: VendorDocCandidate,
+        metadata: dict[str, object],
+    ) -> None:
+        source = self.session.execute(
+            select(Source).where(
+                Source.tenant_id == _global_tenant_id(),
+                Source.repo_id.is_(None),
+                Source.source_type == "vendor_doc",
+                Source.path_or_url == candidate.url,
+            )
+        ).scalar_one_or_none()
+        source_metadata = {
+            "package_name": package_name,
+            "ecosystem": ecosystem,
+            "doc_type": candidate.doc_type,
+            "version_range": candidate.version_range,
+            **metadata,
+        }
+        if source is None:
+            source = Source(
+                tenant_id=_global_tenant_id(),
+                repo_id=None,
+                source_type="vendor_doc",
+                authority="official",
+                path_or_url=candidate.url,
+                version_range=candidate.version_range,
+                acl_scope=_vendor_doc_acl_scope(),
+                metadata_json=source_metadata,
+            )
+            self.session.add(source)
+            self.session.flush()
+        else:
+            source.authority = "official"
+            source.version_range = candidate.version_range
+            source.acl_scope = _vendor_doc_acl_scope()
+            source.metadata_json = source_metadata
+            self.session.execute(delete(Document).where(Document.source_id == source.id))
+
+        for section in _candidate_sections(candidate):
+            section_title = str(
+                section.get("section_title")
+                or section.get("heading")
+                or candidate.section_title
+                or candidate.title
+            )
+            section_text = str(section.get("raw_text") or candidate.raw_text).strip()
+            if not section_text:
+                continue
+            section_index = int(section.get("section_index", 0))
+            section_metadata = {
+                **metadata,
+                "package_name": package_name,
+                "ecosystem": ecosystem,
+                "doc_type": candidate.doc_type,
+                "parent_dependency_doc_url": candidate.url,
+                "section_heading": section.get("heading"),
+                "section_version_heading": section.get("version_heading"),
+                "section_index": section_index,
+            }
+            document = Document(
+                tenant_id=_global_tenant_id(),
+                repo_id=None,
+                source_id=source.id,
+                title=candidate.title,
+                section_title=section_title,
+                mime_type="text/html",
+                language="markdown",
+                checksum=_section_checksum(
+                    title=candidate.title,
+                    section_title=section_title,
+                    raw_text=section_text,
+                ),
+                raw_text=section_text,
+                metadata_json=section_metadata,
+            )
+            self.session.add(document)
+            self.session.flush()
+
+            context_prefix = _build_vendor_doc_context_prefix(
+                package_name=package_name,
+                ecosystem=ecosystem,
+                candidate=candidate,
+                section_title=section_title,
+            )
+            self.session.add(
+                Chunk(
+                    tenant_id=_global_tenant_id(),
+                    repo_id=None,
+                    document_id=document.id,
+                    source_id=source.id,
+                    chunk_index=0,
+                    chunk_type="vendor_doc_section",
+                    symbol_path=None,
+                    text=section_text,
+                    context_prefix=context_prefix,
+                    token_count=max(1, len(section_text.split())),
+                    embedding=embed_text(f"{context_prefix}\n{section_text}"),
+                    authority="official",
+                    version_range=candidate.version_range,
+                    acl_scope=_vendor_doc_acl_scope(),
+                    metadata_json=section_metadata,
+                )
+            )
 
     def _is_allowed_domain(self, url: str, allowed_domains: list[str]) -> bool:
         if not allowed_domains:
@@ -361,6 +482,10 @@ class _SimpleHtmlDocParser(HTMLParser):
         self.links: list[str] = []
         self.headings: list[dict[str, str]] = []
         self.version_headings: list[str] = []
+        self.sections: list[dict[str, object]] = []
+        self._section_heading: str | None = None
+        self._section_level: str | None = None
+        self._section_parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._current_tag = tag.lower()
@@ -384,10 +509,65 @@ class _SimpleHtmlDocParser(HTMLParser):
             self.headings.append({"level": self._current_tag, "text": text})
             if _looks_like_version_heading(text):
                 self.version_headings.append(text)
+            self._start_section(level=self._current_tag, heading=text)
+        elif self._section_heading is not None:
+            self._section_parts.append(text)
         self._parts.append(text)
 
     def text_content(self) -> str:
         return "\n".join(self._parts)
+
+    def section_payloads(self) -> list[dict[str, object]]:
+        sections = list(self.sections)
+        current = self._current_section_payload()
+        if current is not None:
+            sections.append(current)
+        if sections:
+            return sections
+        raw_text = self.text_content().strip()
+        if not raw_text:
+            return []
+        fallback_title = self.first_heading or self.title or "Document"
+        return [
+            {
+                "section_title": fallback_title,
+                "heading": fallback_title,
+                "raw_text": raw_text,
+                "section_index": 0,
+                "version_heading": (
+                    fallback_title
+                    if _looks_like_version_heading(fallback_title)
+                    else None
+                ),
+            }
+        ]
+
+    def _start_section(self, level: str, heading: str) -> None:
+        current = self._current_section_payload()
+        if current is not None:
+            self.sections.append(current)
+        self._section_heading = heading
+        self._section_level = level
+        self._section_parts = []
+
+    def _current_section_payload(self) -> dict[str, object] | None:
+        if self._section_heading is None:
+            return None
+        raw_text = "\n".join(self._section_parts).strip()
+        if not raw_text:
+            return None
+        return {
+            "section_title": self._section_heading,
+            "heading": self._section_heading,
+            "level": self._section_level,
+            "raw_text": raw_text,
+            "version_heading": (
+                self._section_heading
+                if _looks_like_version_heading(self._section_heading)
+                else None
+            ),
+            "section_index": len(self.sections),
+        }
 
 
 def _infer_doc_type(
@@ -441,6 +621,7 @@ def _doc_structure_metadata(
         "structure_kind": (
             "versioned_sections" if parser.version_headings else "flat_sections"
         ),
+        "sections": parser.section_payloads(),
     }
     if response_headers is not None:
         etag = response_headers.get("etag")
@@ -509,3 +690,67 @@ def _serialize_candidate_snapshot(
         "candidates": candidate_items,
     }
     return json.dumps(payload, sort_keys=True)
+
+
+def _candidate_sections(candidate: VendorDocCandidate) -> list[dict[str, object]]:
+    metadata = getattr(candidate, "metadata_json", None) or {}
+    sections = metadata.get("sections")
+    if isinstance(sections, list):
+        normalized_sections: list[dict[str, object]] = []
+        for index, section in enumerate(sections):
+            if not isinstance(section, dict):
+                continue
+            raw_text = str(section.get("raw_text") or "").strip()
+            if not raw_text:
+                continue
+            normalized_sections.append(
+                {
+                    "section_title": section.get("section_title") or section.get("heading"),
+                    "heading": section.get("heading"),
+                    "raw_text": raw_text,
+                    "version_heading": section.get("version_heading"),
+                    "section_index": int(section.get("section_index", index)),
+                }
+            )
+        if normalized_sections:
+            return normalized_sections
+    fallback_title = candidate.section_title or candidate.title
+    return [
+        {
+            "section_title": fallback_title,
+            "heading": fallback_title,
+            "raw_text": candidate.raw_text,
+            "version_heading": candidate.section_title if candidate.section_title else None,
+            "section_index": 0,
+        }
+    ]
+
+
+def _build_vendor_doc_context_prefix(
+    package_name: str,
+    ecosystem: str,
+    candidate: VendorDocCandidate,
+    section_title: str,
+) -> str:
+    lines = [
+        "SourceType: vendor_doc",
+        f"Package: {package_name}",
+        f"Ecosystem: {ecosystem}",
+        f"DocumentType: {candidate.doc_type}",
+        f"Title: {candidate.title}",
+        f"Section: {section_title}",
+        f"URL: {candidate.url}",
+    ]
+    if candidate.version_range:
+        lines.append(f"VersionRange: {candidate.version_range}")
+    lines.append("This chunk contains official vendor documentation.")
+    return "\n".join(lines)
+
+
+def _section_checksum(title: str, section_title: str, raw_text: str) -> str:
+    payload = "\n".join([title, section_title, raw_text])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _vendor_doc_acl_scope() -> dict[str, str]:
+    return {"visibility": "global"}

@@ -128,11 +128,11 @@
   - [x] cursor 现在记录 candidate set 与 content hash 快照
   - [x] basic conditional requests via ETag / Last-Modified
   - [ ] 仍未做更完整的 page-level delta fetch
-- [~] 提升 changelog / migration section 的结构化抽取
+- [x] 提升 changelog / migration section 的结构化抽取
   - [x] 抽取 heading 结构
   - [x] 抽取 version headings
   - [x] 写入 `section_title` 与 `metadata_json.structure_kind`
-  - [ ] 仍未做 section-level persistence / multi-section indexing
+  - [x] section-level persistence / multi-section indexing
 
 ### Phase 14：Eval Dataset 扩展
 - [x] 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases

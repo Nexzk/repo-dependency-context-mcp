@@ -143,3 +143,67 @@ def test_mcp_tools_return_structured_results(db_session, tmp_path: Path) -> None
     assert dependency_notes["evidence"][1]["path_or_url"] == "docs/fastapi-upgrade-notes.md"
     assert dependency_notes["evidence"][2]["authority"] == "repo"
     assert dependency_notes["evidence"][2]["path_or_url"] == "requirements.txt"
+
+
+def test_dependency_notes_prefers_vendor_doc_sections(db_session) -> None:
+    tenant = Tenant(name="Tenant Vendor Docs", slug="tenant-vendor-docs")
+    db_session.add(tenant)
+    db_session.commit()
+
+    service = VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["fastapi.tiangolo.com"]},
+    )
+    service.ingest_candidates(
+        package_name="fastapi",
+        ecosystem="python",
+        candidates=[
+            VendorDocCandidate(
+                doc_type="migration_guide",
+                authority="official",
+                url="https://fastapi.tiangolo.com/release-notes/",
+                title="FastAPI Release Notes",
+                section_title="0.115",
+                raw_text=(
+                    "FastAPI Release Notes\n"
+                    "0.115\nMigration details for FastAPI 0.115.\n"
+                    "0.116\nMigration details for FastAPI 0.116."
+                ),
+                version_range=">=0.115,<0.117",
+                metadata_json={
+                    "structure_kind": "versioned_sections",
+                    "version_headings": ["0.115", "0.116"],
+                    "sections": [
+                        {
+                            "section_title": "0.115",
+                            "heading": "0.115",
+                            "raw_text": "Migration details for FastAPI 0.115.",
+                            "section_index": 0,
+                        },
+                        {
+                            "section_title": "0.116",
+                            "heading": "0.116",
+                            "raw_text": "Migration details for FastAPI 0.116.",
+                            "section_index": 1,
+                        },
+                    ],
+                },
+            )
+        ],
+    )
+
+    tool_service = MCPToolService(db_session)
+    dependency_notes = tool_service.get_dependency_notes(
+        tenant_id=tenant.id,
+        repo_id=None,
+        package_name="fastapi",
+        version_range=">=0.115,<0.117",
+        topic="migration",
+    )
+
+    vendor_evidence = [
+        item for item in dependency_notes["evidence"] if item["source_type"] == "vendor_doc"
+    ]
+    assert [item["section_title"] for item in vendor_evidence] == ["0.115", "0.116"]
+    assert "0.115" in vendor_evidence[0]["why_selected"]
+    assert "0.116" in vendor_evidence[1]["why_selected"]

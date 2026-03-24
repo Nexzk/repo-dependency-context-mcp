@@ -250,33 +250,14 @@ class MCPToolService:
         topic: str | None = None,
         top_k: int = 5,
     ) -> JSONDict:
-        stmt = select(DependencyDoc).where(DependencyDoc.package_name == package_name)
-        if version_range:
-            stmt = stmt.where(
-                or_(
-                    DependencyDoc.version_range == version_range,
-                    DependencyDoc.version_range.is_(None),
-                )
-            )
-        docs = self.session.scalars(stmt.limit(top_k)).all()
-
         evidence = []
-        for doc in docs:
-            why_selected = self._why_selected_dependency_doc(doc=doc, topic=topic)
-            freshness_reason = "Official vendor documentation ingested from whitelisted domain"
-            evidence.append(
-                {
-                    "source_type": "vendor_doc",
-                    "title": doc.title,
-                    "path_or_url": doc.url,
-                    "symbol_path": None,
-                    "snippet": doc.raw_text[:500],
-                    "why_selected": why_selected,
-                    "freshness_reason": freshness_reason,
-                    "authority": doc.authority,
-                    "version_range": doc.version_range,
-                }
-            )
+        vendor_evidence = self._vendor_doc_evidence(
+            package_name=package_name,
+            version_range=version_range,
+            topic=topic,
+            top_k=top_k,
+        )
+        evidence.extend(vendor_evidence)
 
         if repo_id is not None:
             repo_doc_stmt = (
@@ -377,12 +358,115 @@ class MCPToolService:
             "gaps": [] if evidence else [f"No official dependency notes found for {package_name}"],
         }
 
+    def _vendor_doc_evidence(
+        self,
+        package_name: str,
+        version_range: str | None,
+        topic: str | None,
+        top_k: int,
+    ) -> list[JSONDict]:
+        section_stmt = (
+            select(Chunk, Document, Source)
+            .join(Document, Document.id == Chunk.document_id)
+            .join(Source, Source.id == Chunk.source_id)
+            .where(Source.source_type == "vendor_doc")
+            .where(Chunk.chunk_type == "vendor_doc_section")
+        )
+        section_rows = self.session.execute(section_stmt).all()
+        evidence: list[JSONDict] = []
+        for chunk, document, source in section_rows:
+            source_metadata = source.metadata_json or {}
+            if source_metadata.get("package_name") != package_name:
+                continue
+            source_version_range = source.version_range or source_metadata.get("version_range")
+            if version_range and source_version_range not in {version_range, None}:
+                continue
+            searchable = " ".join(
+                [
+                    document.title or "",
+                    document.section_title or "",
+                    chunk.text,
+                ]
+            ).lower()
+            if topic and topic.lower() not in searchable:
+                continue
+            evidence.append(
+                {
+                    "source_type": "vendor_doc",
+                    "title": document.title,
+                    "section_title": document.section_title,
+                    "path_or_url": source.path_or_url,
+                    "symbol_path": None,
+                    "snippet": chunk.text[:500],
+                    "why_selected": self._why_selected_vendor_doc_section(
+                        package_name=package_name,
+                        document=document,
+                        topic=topic,
+                    ),
+                    "freshness_reason": (
+                        "Official vendor documentation ingested from whitelisted domain"
+                    ),
+                    "authority": "official",
+                    "version_range": source_version_range,
+                }
+            )
+        evidence.sort(
+            key=lambda item: (
+                item.get("section_title") is None,
+                str(item.get("section_title") or ""),
+                str(item.get("path_or_url") or ""),
+            )
+        )
+        if evidence:
+            return evidence[:top_k]
+
+        stmt = select(DependencyDoc).where(DependencyDoc.package_name == package_name)
+        if version_range:
+            stmt = stmt.where(
+                or_(
+                    DependencyDoc.version_range == version_range,
+                    DependencyDoc.version_range.is_(None),
+                )
+            )
+        docs = self.session.scalars(stmt.limit(top_k)).all()
+        for doc in docs:
+            evidence.append(
+                {
+                    "source_type": "vendor_doc",
+                    "title": doc.title,
+                    "section_title": doc.section_title,
+                    "path_or_url": doc.url,
+                    "symbol_path": None,
+                    "snippet": doc.raw_text[:500],
+                    "why_selected": self._why_selected_dependency_doc(doc=doc, topic=topic),
+                    "freshness_reason": (
+                        "Official vendor documentation ingested from whitelisted domain"
+                    ),
+                    "authority": doc.authority,
+                    "version_range": doc.version_range,
+                }
+            )
+        return evidence
+
     def _why_selected_dependency_doc(self, doc: DependencyDoc, topic: str | None) -> str:
         reasons = [f"Matches package {doc.package_name}"]
         if topic and topic.lower() in doc.raw_text.lower():
             reasons.append(f"Mentions topic {topic}")
         if doc.doc_type:
             reasons.append(f"Document type is {doc.doc_type}")
+        return "; ".join(reasons)
+
+    def _why_selected_vendor_doc_section(
+        self,
+        package_name: str,
+        document: Document,
+        topic: str | None,
+    ) -> str:
+        reasons = [f"Matches package {package_name}"]
+        if document.section_title:
+            reasons.append(f"Section {document.section_title}")
+        if topic:
+            reasons.append(f"Mentions topic {topic}")
         return "; ".join(reasons)
 
     def _why_selected_repo_doc(
