@@ -141,7 +141,7 @@
   - [x] ACL isolation case family
   - [x] stale-doc conflict case family
   - [x] ambiguity case family
-- [ ] 扩大 demo dataset 的任务覆盖面
+- [x] 扩大 demo dataset 的任务覆盖面
 
 ### Phase 15：Online Feedback
 - [x] 落地 T-083 feedback ingest

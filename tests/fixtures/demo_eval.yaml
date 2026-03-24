@@ -117,3 +117,47 @@ cases:
     expected_why_selected_contains:
       - signal
     requires_clarification: true
+  - id: impact_admin_guard_changes
+    query: what is impacted by require_admin changes
+    task_type: impact_analysis
+    tenant_id: __TENANT_ID__
+    repo_id: __REPO_ID__
+    must_hit_sources:
+      - repo_code:src/auth.py
+      - repo_doc:docs/auth.md
+    expected_authorities:
+      - repo
+    expected_freshness_contains:
+      - repository content
+    expected_why_selected_contains:
+      - signal
+    requires_clarification: false
+  - id: debug_recent_auth_regression
+    query: possible regression around require_admin for privileged users
+    task_type: debug
+    tenant_id: __TENANT_ID__
+    repo_id: __REPO_ID__
+    must_hit_sources:
+      - issue:issue:issue-77
+    expected_authorities:
+      - repo
+    expected_why_selected_contains:
+      - signal
+    requires_clarification: false
+  - id: internal_fastapi_upgrade_note_lookup
+    tool: get_dependency_notes
+    query: where is our internal fastapi upgrade note
+    task_type: migration
+    tenant_id: __TENANT_ID__
+    repo_id: __REPO_ID__
+    package_name: fastapi
+    version_range: 0.115.x
+    topic: migration
+    must_hit_sources:
+      - repo_doc:docs/fastapi-upgrade-notes.md
+    expected_authorities:
+      - official
+      - repo
+    expected_freshness_contains:
+      - internal repository note
+    requires_clarification: false

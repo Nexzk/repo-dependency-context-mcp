@@ -909,6 +909,47 @@ cases:
     expected_why_selected_contains:
       - signal
     requires_clarification: true
+  - id: impact_admin_guard_changes
+    query: what is impacted by require_admin changes
+    task_type: impact_analysis
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - repo_code:src/auth.py
+      - repo_doc:docs/auth.md
+    expected_authorities:
+      - repo
+    expected_freshness_contains:
+      - repository content
+    expected_why_selected_contains:
+      - signal
+  - id: debug_recent_auth_regression
+    query: possible regression around require_admin for privileged users
+    task_type: debug
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    must_hit_sources:
+      - issue:issue:issue-77
+    expected_authorities:
+      - repo
+    expected_why_selected_contains:
+      - signal
+  - id: internal_fastapi_upgrade_note_lookup
+    tool: get_dependency_notes
+    query: where is our internal fastapi upgrade note
+    task_type: migration
+    tenant_id: "{tenant.id}"
+    repo_id: "{repo.id}"
+    package_name: fastapi
+    version_range: 0.115.x
+    topic: migration
+    must_hit_sources:
+      - repo_doc:docs/fastapi-upgrade-notes.md
+    expected_authorities:
+      - official
+      - repo
+    expected_freshness_contains:
+      - internal repository note
 """.strip(),
         encoding="utf-8",
     )
@@ -922,7 +963,7 @@ cases:
     }
     eval_cases_by_name = {case.name: case for case in eval_case_rows}
 
-    assert summary["case_count"] == 6
+    assert summary["case_count"] == 9
     assert summary["recall_at_5"] == 1.0
     assert summary["evidence_contract_score"] == 1.0
     assert summary["overall_score"] >= 0.95
@@ -979,6 +1020,24 @@ cases:
     assert (
         case_results["related_auth_changes"].result_payload["scores"]["retrieval_score"]
         >= 0.75
+    )
+    assert (
+        case_results["impact_admin_guard_changes"].result_payload["scores"][
+            "retrieval_score"
+        ]
+        == 1.0
+    )
+    assert (
+        case_results["debug_recent_auth_regression"].result_payload["scores"][
+            "retrieval_score"
+        ]
+        == 1.0
+    )
+    assert (
+        case_results["internal_fastapi_upgrade_note_lookup"].result_payload["scores"][
+            "authority_match"
+        ]
+        == 1.0
     )
 
 
