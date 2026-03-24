@@ -103,6 +103,11 @@ class MCPToolService:
             "commits": [],
             "issues": [],
         }
+        available_refs = {
+            f"{source.source_type}:{source.external_ref}"
+            for _, _, source in rows
+            if source.external_ref
+        }
         ranked_items: dict[str, list[tuple[tuple[int, float, str], RelatedChangeItem]]] = {
             "pull_requests": [],
             "commits": [],
@@ -137,23 +142,59 @@ class MCPToolService:
                 "source_commit_sha": chunk.metadata_json.get("source_commit_sha"),
                 "source_commit_ref": chunk.metadata_json.get("source_commit_ref"),
                 "source_issue_ref": chunk.metadata_json.get("source_issue_ref"),
+                "linked_change_refs": _linked_change_refs(chunk.metadata_json),
+                "graph_link_count": _graph_link_count(
+                    metadata=chunk.metadata_json,
+                    available_refs=available_refs,
+                ),
                 "match_kind": match.kind,
                 "match_evidence": match.evidence,
             }
             if source.source_type == "pr":
                 ranked_items["pull_requests"].append(
-                    ((match.rank, merged_at_ts, source.external_ref or ""), item)
+                    (
+                        (
+                            match.rank,
+                            item["graph_link_count"],
+                            merged_at_ts,
+                            source.external_ref or "",
+                        ),
+                        item,
+                    )
                 )
             elif source.source_type == "commit":
                 ranked_items["commits"].append(
-                    ((match.rank, merged_at_ts, source.external_ref or ""), item)
+                    (
+                        (
+                            match.rank,
+                            item["graph_link_count"],
+                            merged_at_ts,
+                            source.external_ref or "",
+                        ),
+                        item,
+                    )
                 )
             elif source.source_type == "issue":
                 ranked_items["issues"].append(
-                    ((match.rank, merged_at_ts, source.external_ref or ""), item)
+                    (
+                        (
+                            match.rank,
+                            item["graph_link_count"],
+                            merged_at_ts,
+                            source.external_ref or "",
+                        ),
+                        item,
+                    )
                 )
         for key, values in ranked_items.items():
-            values.sort(key=lambda pair: (-pair[0][0], -pair[0][1], pair[0][2]))
+            values.sort(
+                key=lambda pair: (
+                    -pair[0][0],
+                    -pair[0][1],
+                    -pair[0][2],
+                    pair[0][3],
+                )
+            )
             result[key] = [item for _, item in values]
         return result
 
@@ -534,3 +575,15 @@ def _related_symbols(metadata: JSONDict) -> list[str]:
         for value in metadata.get("related_paths", [])
         if "/" not in str(value) and "." not in str(value)
     ]
+
+
+def _linked_change_refs(metadata: JSONDict) -> list[str]:
+    return [str(value) for value in metadata.get("linked_change_refs", [])]
+
+
+def _graph_link_count(metadata: JSONDict, available_refs: set[str]) -> int:
+    return sum(
+        1
+        for value in _linked_change_refs(metadata)
+        if value in available_refs
+    )

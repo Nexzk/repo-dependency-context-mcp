@@ -1860,6 +1860,7 @@ D. 第一阶段的代码骨架
    - repo-backed query expansion
    - canonical file/symbol refs during change ingest
    - `match_kind` / `match_evidence` result explanation
+   - explicit `linked_change_refs` graph edges and graph-link-aware tie-break
 
 2. dependency docs 深化
 - 更强的增量同步策略

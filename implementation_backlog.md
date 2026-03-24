@@ -120,7 +120,7 @@
 - [~] 提升 PR / issue / commit 与 symbol / file 的显式关联质量
   - [x] canonical `related_file_paths`
   - [x] canonical `related_symbols`
-  - [ ] 仍缺跨变更链路级显式图结构
+  - [x] `linked_change_refs` graph edges + graph-link-aware tie-break
 
 ### Phase 13：Dependency Docs 深化
 - [~] 从 bounded discovery 向更强的增量同步策略推进

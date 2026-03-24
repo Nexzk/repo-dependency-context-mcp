@@ -283,7 +283,30 @@ def _normalize_source_refs(
         refs["source_commit_ref"] = refs["source_commit_ref"] or external_ref
     elif source_type == "issue":
         refs["source_issue_ref"] = refs["source_issue_ref"] or external_ref
+    refs["linked_change_refs"] = _linked_change_refs(
+        source_type=source_type,
+        external_ref=external_ref,
+        refs=refs,
+    )
     return refs
+
+
+def _linked_change_refs(
+    source_type: str,
+    external_ref: str,
+    refs: dict[str, Any],
+) -> list[str]:
+    linked_refs: set[str] = set()
+    if refs.get("source_pr_ref"):
+        linked_refs.add(f"pr:{refs['source_pr_ref']}")
+    if refs.get("source_commit_ref"):
+        linked_refs.add(f"commit:{refs['source_commit_ref']}")
+    if refs.get("source_issue_ref"):
+        linked_refs.add(f"issue:{refs['source_issue_ref']}")
+
+    self_ref = f"{source_type}:{external_ref}"
+    linked_refs.discard(self_ref)
+    return sorted(linked_refs)
 
 
 class _RepoReferenceIndex:

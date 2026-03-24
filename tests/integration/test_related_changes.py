@@ -421,6 +421,84 @@ def test_get_related_changes_expands_symbol_query_to_repo_file_hints(
     assert result["issues"][1]["match_evidence"] == ["expanded_path:src/auth.py"]
 
 
+def test_get_related_changes_exposes_and_uses_explicit_change_links(
+    db_session,
+    tmp_path: Path,
+) -> None:
+    tenant = Tenant(name="Tenant Linked Changes", slug="tenant-linked-changes")
+    db_session.add(tenant)
+    db_session.flush()
+
+    repo = Repo(
+        tenant_id=tenant.id,
+        name="linked-repo",
+        provider="local",
+        external_id="linked-repo",
+        default_branch="main",
+        acl_scope={"visibility": "private"},
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    fixture_path = tmp_path / "changes_linked.json"
+    fixture_path.write_text(
+        """
+[
+  {
+    "source_type": "pr",
+    "external_ref": "pr-auth",
+    "title": "Auth middleware update",
+    "body": "Touches require_admin symbol.",
+    "author": "alice",
+    "merged_at": "2026-03-20T00:00:00Z",
+    "related_symbols": ["require_admin"]
+  },
+  {
+    "source_type": "issue",
+    "external_ref": "issue-linked",
+    "title": "Follow-up on auth middleware update",
+    "body": "Tracks same symbol and explicitly links to the PR.",
+    "author": "bob",
+    "merged_at": "2026-03-20T00:00:00Z",
+    "related_symbols": ["require_admin"],
+    "source_pr_ref": "pr-auth"
+  },
+  {
+    "source_type": "issue",
+    "external_ref": "issue-unlinked",
+    "title": "Parallel auth middleware regression",
+    "body": "Tracks same symbol without explicit linked change refs.",
+    "author": "carol",
+    "merged_at": "2026-03-20T00:00:00Z",
+    "related_symbols": ["require_admin"]
+  }
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    ChangeMetadataIngestService(db_session).ingest_json_fixture(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        fixture_path=fixture_path,
+        acl_scope={"visibility": "private"},
+    )
+
+    result = MCPToolService(db_session).get_related_changes(
+        tenant_id=tenant.id,
+        repo_id=repo.id,
+        path_or_symbol="require_admin",
+        since_days=90,
+    )
+
+    issue_refs = [item["external_ref"] for item in result["issues"]]
+    assert issue_refs == ["issue-linked", "issue-unlinked"]
+    assert result["issues"][0]["linked_change_refs"] == ["pr:pr-auth"]
+    assert result["issues"][0]["graph_link_count"] == 1
+    assert result["issues"][1]["linked_change_refs"] == []
+    assert result["issues"][1]["graph_link_count"] == 0
+
+
 def test_get_related_changes_expands_path_query_to_repo_symbol_hints(
     db_session,
     tmp_path: Path,
