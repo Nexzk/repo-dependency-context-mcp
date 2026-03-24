@@ -338,6 +338,7 @@ class VendorDocIngestService:
         candidate: VendorDocCandidate,
         metadata: dict[str, object],
     ) -> None:
+        sections = _candidate_sections(candidate)
         source = self.session.execute(
             select(Source).where(
                 Source.tenant_id == _global_tenant_id(),
@@ -351,6 +352,8 @@ class VendorDocIngestService:
             "ecosystem": ecosystem,
             "doc_type": candidate.doc_type,
             "version_range": candidate.version_range,
+            "page_content_hash": _page_content_hash(candidate.raw_text),
+            "section_index_hash": _section_index_hash(sections),
             **metadata,
         }
         if source is None:
@@ -367,13 +370,18 @@ class VendorDocIngestService:
             self.session.add(source)
             self.session.flush()
         else:
+            existing_index_doc = self.session.execute(
+                select(Document.id).where(Document.source_id == source.id).limit(1)
+            ).scalar_one_or_none()
+            if source.metadata_json == source_metadata and existing_index_doc is not None:
+                return
             source.authority = "official"
             source.version_range = candidate.version_range
             source.acl_scope = _vendor_doc_acl_scope()
             source.metadata_json = source_metadata
             self.session.execute(delete(Document).where(Document.source_id == source.id))
 
-        for section in _candidate_sections(candidate):
+        for section in sections:
             section_title = str(
                 section.get("section_title")
                 or section.get("heading")
@@ -749,6 +757,15 @@ def _build_vendor_doc_context_prefix(
 
 def _section_checksum(title: str, section_title: str, raw_text: str) -> str:
     payload = "\n".join([title, section_title, raw_text])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _page_content_hash(raw_text: str) -> str:
+    return hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+
+
+def _section_index_hash(sections: list[dict[str, object]]) -> str:
+    payload = json.dumps(sections, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

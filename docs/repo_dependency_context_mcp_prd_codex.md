@@ -1872,6 +1872,7 @@ D. 第一阶段的代码骨架
    - snapshot-based vendor-doc sync cursor
    - candidate-set and content-hash checkpointing
    - basic conditional requests via ETag / Last-Modified
+   - page-level delta fetch
 
 3. eval dataset 深化
 - 增加 explain / debug / ambiguity / stale-doc conflict / ACL isolation cases

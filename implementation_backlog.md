@@ -123,11 +123,11 @@
   - [x] `linked_change_refs` graph edges + graph-link-aware tie-break
 
 ### Phase 13：Dependency Docs 深化
-- [~] 从 bounded discovery 向更强的增量同步策略推进
+- [x] 从 bounded discovery 向更强的增量同步策略推进
   - [x] sync cursor 从 request-targets 升级为 vendor-doc snapshot
   - [x] cursor 现在记录 candidate set 与 content hash 快照
   - [x] basic conditional requests via ETag / Last-Modified
-  - [ ] 仍未做更完整的 page-level delta fetch
+  - [x] page-level delta fetch
 - [x] 提升 changelog / migration section 的结构化抽取
   - [x] 抽取 heading 结构
   - [x] 抽取 version headings

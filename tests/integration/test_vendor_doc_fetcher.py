@@ -695,3 +695,153 @@ def test_fetch_and_ingest_uses_conditional_headers_and_skips_unchanged_docs(
     docs = db_session.scalars(select(DependencyDoc)).all()
     assert len(docs) == 1
     assert docs[0].raw_text == "Existing release notes"
+
+
+def test_ingest_candidates_skips_rebuilding_section_index_when_page_is_unchanged(
+    db_session: Session,
+) -> None:
+    service = VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["docs.example.com"]},
+    )
+    candidate = VendorDocCandidate(
+        doc_type="migration_guide",
+        authority="official",
+        url="https://docs.example.com/docs/migration/v2",
+        title="Migration Guide",
+        section_title="v2",
+        raw_text=(
+            "Migration Guide\n"
+            "v2\nUpgrade steps for v2.\n"
+            "Compatibility\nCompatibility notes."
+        ),
+        version_range=">=0.110,<1.0",
+        metadata_json={
+            "structure_kind": "versioned_sections",
+            "version_headings": ["v2"],
+            "sections": [
+                {
+                    "section_title": "v2",
+                    "heading": "v2",
+                    "raw_text": "Upgrade steps for v2.",
+                    "section_index": 0,
+                },
+                {
+                    "section_title": "Compatibility",
+                    "heading": "Compatibility",
+                    "raw_text": "Compatibility notes.",
+                    "section_index": 1,
+                },
+            ],
+        },
+    )
+
+    first = service.ingest_candidates("fastapi", "python", [candidate])
+    source = db_session.scalar(
+        select(Source).where(
+            Source.source_type == "vendor_doc",
+            Source.path_or_url == candidate.url,
+        )
+    )
+    assert first == 1
+    assert source is not None
+
+    original_document_ids = db_session.scalars(
+        select(Document.id)
+        .where(Document.source_id == source.id)
+        .order_by(Document.section_title)
+    ).all()
+    original_chunk_ids = db_session.scalars(
+        select(Chunk.id)
+        .where(Chunk.source_id == source.id)
+        .order_by(Chunk.chunk_index, Chunk.created_at)
+    ).all()
+
+    second = service.ingest_candidates("fastapi", "python", [candidate])
+
+    assert second == 0
+    assert db_session.scalars(
+        select(Document.id)
+        .where(Document.source_id == source.id)
+        .order_by(Document.section_title)
+    ).all() == original_document_ids
+    assert db_session.scalars(
+        select(Chunk.id)
+        .where(Chunk.source_id == source.id)
+        .order_by(Chunk.chunk_index, Chunk.created_at)
+    ).all() == original_chunk_ids
+
+
+def test_ingest_candidates_rebuilds_section_index_when_page_changes(
+    db_session: Session,
+) -> None:
+    service = VendorDocIngestService(
+        db_session,
+        official_domains={"fastapi": ["docs.example.com"]},
+    )
+    original = VendorDocCandidate(
+        doc_type="migration_guide",
+        authority="official",
+        url="https://docs.example.com/docs/migration/v2",
+        title="Migration Guide",
+        section_title="v2",
+        raw_text="Migration Guide\nv2\nUpgrade steps for v2.",
+        version_range=">=0.110,<1.0",
+        metadata_json={
+            "structure_kind": "versioned_sections",
+            "version_headings": ["v2"],
+            "sections": [
+                {
+                    "section_title": "v2",
+                    "heading": "v2",
+                    "raw_text": "Upgrade steps for v2.",
+                    "section_index": 0,
+                }
+            ],
+        },
+    )
+    updated = VendorDocCandidate(
+        doc_type="migration_guide",
+        authority="official",
+        url="https://docs.example.com/docs/migration/v2",
+        title="Migration Guide",
+        section_title="v2",
+        raw_text="Migration Guide\nv2\nUpgrade steps for v2 updated.",
+        version_range=">=0.110,<1.0",
+        metadata_json={
+            "structure_kind": "versioned_sections",
+            "version_headings": ["v2"],
+            "sections": [
+                {
+                    "section_title": "v2",
+                    "heading": "v2",
+                    "raw_text": "Upgrade steps for v2 updated.",
+                    "section_index": 0,
+                }
+            ],
+        },
+    )
+
+    service.ingest_candidates("fastapi", "python", [original])
+    source = db_session.scalar(
+        select(Source).where(
+            Source.source_type == "vendor_doc",
+            Source.path_or_url == original.url,
+        )
+    )
+    assert source is not None
+    original_document_ids = db_session.scalars(
+        select(Document.id).where(Document.source_id == source.id)
+    ).all()
+
+    updated_count = service.ingest_candidates("fastapi", "python", [updated])
+    updated_texts = db_session.scalars(
+        select(Document.raw_text).where(Document.source_id == source.id)
+    ).all()
+    updated_document_ids = db_session.scalars(
+        select(Document.id).where(Document.source_id == source.id)
+    ).all()
+
+    assert updated_count == 1
+    assert updated_document_ids != original_document_ids
+    assert updated_texts == ["Upgrade steps for v2 updated."]
